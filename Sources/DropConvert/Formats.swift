@@ -33,7 +33,7 @@ struct EncodeOptions {
 }
 
 struct OutputFormat: Identifiable, Hashable {
-    enum Kind: String { case video = "Video", image = "Animated image", audio = "Audio only" }
+    enum Kind: String { case video = "Video", still = "Still image", image = "Animated image", audio = "Audio only" }
 
     let id: String
     let name: String
@@ -43,10 +43,12 @@ struct OutputFormat: Identifiable, Hashable {
     /// or when `hardwareEncoder` does.
     let encoders: [String]
     let hardwareEncoder: String?
+    /// Whether the Quality control is meaningful (false for lossless image formats).
+    var hasQuality: Bool = true
     /// Codec arguments (after `-i input`, before the output path).
     let build: (EncodeOptions) -> [String]
 
-    var canRemux: Bool { kind != .image }
+    var canRemux: Bool { kind == .video || kind == .audio }
 
     func isAvailable(_ encoders: Set<String>) -> Bool {
         self.encoders.allSatisfy(encoders.contains) || hardwareEncoder.map(encoders.contains) == true
@@ -62,6 +64,7 @@ struct OutputFormat: Identifiable, Hashable {
         } else {
             args += kind == .audio ? ["-map", "0:a:0", "-vn"] : ["-map", "0:v:0", "-map", "0:a:0?"]
             args += build(o)
+            if kind == .still { args += ["-frames:v", "1"] }
         }
         if ext == "mp4" || ext == "mov" || ext == "m4v" || ext == "m4a" {
             args += ["-movflags", "+faststart"]
@@ -109,6 +112,26 @@ private func vp9(_ o: EncodeOptions) -> [String] {
 private func aac(_ o: EncodeOptions) -> [String] { ["-c:a", "aac", "-b:a", o.quality.pick("256k", "192k", "128k")] }
 private func opus(_ o: EncodeOptions) -> [String] { ["-c:a", "libopus", "-b:a", o.quality.pick("160k", "128k", "96k")] }
 private func mp3(_ o: EncodeOptions) -> [String] { ["-c:a", "libmp3lame", "-q:a", o.quality.pick("0", "2", "5")] }
+
+// MARK: - Still-image building blocks
+
+/// Scale a still to the chosen height (never up) without even-dimension forcing,
+/// since lossless formats accept odd sizes; no filter for Original (pixel-exact).
+private func stillScale(_ o: EncodeOptions) -> [String] {
+    if o.resolution == .original { return [] }
+    return ["-vf", "scale=-2:'min(\(o.resolution.rawValue),ih)':flags=lanczos"]
+}
+
+private func png(_ o: EncodeOptions) -> [String] { stillScale(o) + ["-c:v", "png"] }
+private func tiff(_ o: EncodeOptions) -> [String] { stillScale(o) + ["-c:v", "tiff"] }
+private func bmp(_ o: EncodeOptions) -> [String] { stillScale(o) + ["-c:v", "bmp"] }
+private func qoi(_ o: EncodeOptions) -> [String] { stillScale(o) + ["-c:v", "qoi"] }
+private func mjpeg(_ o: EncodeOptions) -> [String] {
+    scaleFilter(o) + ["-c:v", "mjpeg", "-q:v", "\(o.quality.pick(2, 5, 9))"]
+}
+private func webp(_ o: EncodeOptions) -> [String] {
+    scaleFilter(o) + ["-c:v", "libwebp", "-q:v", "\(o.quality.pick(90, 75, 60))", "-compression_level", "6"]
+}
 
 private func h264Format(_ id: String, _ name: String, _ ext: String, extra: [String] = []) -> OutputFormat {
     OutputFormat(id: id, name: name, ext: ext, kind: .video, encoders: ["libx264", "aac"],
@@ -174,6 +197,18 @@ extension OutputFormat {
             scaleFilter(o) + ["-c:v", "libtheora", "-q:v", o.quality.pick("9", "7", "5"),
                               "-c:a", "libvorbis", "-q:a", "5"]
         },
+        OutputFormat(id: "jpg", name: "JPG", ext: "jpg", kind: .still,
+                     encoders: ["mjpeg"], hardwareEncoder: nil) { mjpeg($0) },
+        OutputFormat(id: "png", name: "PNG", ext: "png", kind: .still,
+                     encoders: ["png"], hardwareEncoder: nil, hasQuality: false) { png($0) },
+        OutputFormat(id: "webp", name: "WebP", ext: "webp", kind: .still,
+                     encoders: ["libwebp"], hardwareEncoder: nil) { webp($0) },
+        OutputFormat(id: "tiff", name: "TIFF", ext: "tiff", kind: .still,
+                     encoders: ["tiff"], hardwareEncoder: nil, hasQuality: false) { tiff($0) },
+        OutputFormat(id: "bmp", name: "BMP", ext: "bmp", kind: .still,
+                     encoders: ["bmp"], hardwareEncoder: nil, hasQuality: false) { bmp($0) },
+        OutputFormat(id: "qoi", name: "QOI", ext: "qoi", kind: .still,
+                     encoders: ["qoi"], hardwareEncoder: nil, hasQuality: false) { qoi($0) },
         OutputFormat(id: "gif", name: "GIF", ext: "gif", kind: .image,
                      encoders: ["gif"], hardwareEncoder: nil) { o in
             let height = o.resolution == .original ? 480 : min(o.resolution.rawValue, 720)

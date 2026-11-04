@@ -30,7 +30,7 @@
     <array>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>Video</string>
+            <string>Media</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
@@ -40,6 +40,7 @@
                 <string>public.movie</string>
                 <string>public.audiovisual-content</string>
                 <string>public.audio</string>
+                <string>public.image</string>
             </array>
         </dict>
     </array>

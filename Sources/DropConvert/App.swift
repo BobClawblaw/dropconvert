@@ -26,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem.button else { return }
         button.image = Self.icon(busy: false)
-        button.toolTip = "DropConvert: drop videos here to convert them"
+        button.toolTip = "DropConvert: drop videos or images here to convert them"
         button.target = self
         button.action = #selector(togglePopover)
 

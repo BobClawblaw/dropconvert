@@ -69,7 +69,7 @@ struct ContentView: View {
         VStack(spacing: 6) {
             Image(systemName: "arrow.down.doc")
                 .font(.system(size: 28, weight: .light))
-            Text("Drop videos here").font(.callout.weight(.medium))
+            Text("Drop videos or images here").font(.callout.weight(.medium))
             Text("or on the menu-bar icon · click to choose")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -100,7 +100,7 @@ struct ContentView: View {
         let format = formats.first { $0.id == settings.formatID } ?? formats.first
         return VStack(alignment: .leading, spacing: 8) {
             Picker("Convert to", selection: $settings.formatID) {
-                ForEach([OutputFormat.Kind.video, .image, .audio], id: \.self) { kind in
+                ForEach([OutputFormat.Kind.video, .still, .image, .audio], id: \.self) { kind in
                     Section(kind.rawValue) {
                         ForEach(formats.filter { $0.kind == kind }) { f in
                             Text("\(f.name)  (.\(f.ext))").tag(f.id)
@@ -113,10 +113,12 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Picker("Quality", selection: $settings.quality) {
-                    ForEach(Quality.allCases) { Text($0.label).tag($0) }
+                if format?.hasQuality == true {
+                    Picker("Quality", selection: $settings.quality) {
+                        ForEach(Quality.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
                 if format?.kind != .audio {
                     Picker("Size", selection: $settings.resolution) {
                         ForEach(Resolution.allCases) { Text($0.label).tag($0) }
@@ -157,8 +159,8 @@ struct ContentView: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.movie, .video, .audiovisualContent, .audio]
-        panel.message = "Choose videos to convert"
+        panel.allowedContentTypes = [.movie, .video, .audiovisualContent, .audio, .image]
+        panel.message = "Choose videos or images to convert"
         NSApp.activate()
         if panel.runModal() == .OK { queue.add(panel.urls) }
     }

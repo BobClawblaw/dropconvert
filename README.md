@@ -1,13 +1,14 @@
 # DropConvert
 
-A small macOS menu-bar app: drop a video on its icon (or into its popover) and it converts the file to the format you
-picked, using ffmpeg. The result lands beside the original, or in a folder you choose.
+A small macOS menu-bar app: drop a video or image on its icon (or into its popover) and it converts the file to the
+format you picked, using ffmpeg. The result lands beside the original, or in a folder you choose.
 
 ## Formats
 
 | Kind | Formats |
 |---|---|
 | Video | MP4 (H.264, HEVC, AV1), MOV (H.264, HEVC, ProRes 422), M4V, MKV (H.264, HEVC), WebM (VP9, AV1), AVI (MPEG-4 Part 2), MPG (MPEG-2), MPEG-TS, FLV, 3GP, WMV, OGV (Theora) |
+| Still image | JPG, PNG, WebP, TIFF, BMP, QOI |
 | Animated image | GIF (two-pass palette) |
 | Audio only | MP3, M4A (AAC), WAV, FLAC |
 
@@ -17,9 +18,11 @@ stays hidden).
 ## Options
 
 - **Quality:** Low / Medium / High, mapped to each encoder's own scale (CRF for x264/x265/VP9/AV1, `-q:v` for
-  VideoToolbox and the MPEG-family encoders, profile for ProRes, bitrate for audio).
-- **Size:** Original, 2160p, 1080p, 720p or 480p. Video is never upscaled, and odd dimensions are trimmed to even ones
-  so 4:2:0 encoders accept them.
+  VideoToolbox and the MPEG-family encoders, profile for ProRes, bitrate for audio). Lossless image formats (PNG,
+  TIFF, BMP, QOI) have no quality setting, so the control is hidden for them.
+- **Size:** Original, 2160p, 1080p, 720p or 480p — the longest side, which is never upscaled. For video, odd
+  dimensions are trimmed to even ones so 4:2:0 encoders accept them; still images keep odd sizes (lossless formats)
+  unless a smaller target is chosen.
 - **Copy streams (no re-encode):** remuxes into the new container. It's fast and lossless, but it fails when the codecs
   don't fit the container (H.264 into WebM, say).
 - **Hardware encoder (gear menu):** uses VideoToolbox for H.264, HEVC and ProRes. It's on by default and much faster;
@@ -28,7 +31,7 @@ stays hidden).
 
 Files convert one at a time, in drop order. Each one shows progress and can be cancelled or retried. A failed or
 cancelled conversion leaves no partial file. Existing files are never overwritten: `clip.mp4` becomes `clip 2.mp4`.
-DropConvert is also registered as an "Open With" app for videos in Finder.
+DropConvert is also registered as an "Open With" app for videos and images in Finder.
 
 ## Requirements
 
