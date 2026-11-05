@@ -37,6 +37,6 @@ if [ "${NOTARIZE:-0}" = "1" ]; then
     echo "Notarized and stapled $DMG"
 fi
 
-shasum -a 256 "$DMG" > "$DMG.sha256"
+(cd build && shasum -a 256 "DropConvert-$VERSION.dmg") > "$DMG.sha256"
 echo "Built $DMG"
 cat "$DMG.sha256"
