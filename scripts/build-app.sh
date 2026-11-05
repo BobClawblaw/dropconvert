@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 VERSION="1.2.0"
 APP="build/DropConvert.app"
 
-swift build -c release --disable-sandbox
-BIN="$(swift build -c release --disable-sandbox --show-bin-path)/DropConvert"
+swift build -c release --disable-sandbox --arch arm64 --arch x86_64
+BIN="$(swift build -c release --disable-sandbox --arch arm64 --arch x86_64 --show-bin-path)/DropConvert"
 
 [ -f Resources/AppIcon.icns ] || swift scripts/make-icon.swift Resources/AppIcon.icns
 
