@@ -31,6 +31,7 @@ struct ContentView: View {
         HStack {
             Image(systemName: "film.stack").foregroundStyle(.secondary)
             Text("DropConvert").font(.headline)
+            Text("v\(version)").font(.caption2).foregroundStyle(.secondary)
             Spacer()
             Menu {
                 Toggle("Use hardware encoder (VideoToolbox)", isOn: $settings.hardware)
@@ -45,6 +46,10 @@ struct ContentView: View {
                 }
                 Divider()
                 Button("Check for ffmpeg and yt-dlp") { queue.relocate() }
+                Divider()
+                Button("About DropConvert") {
+                    NSApp.sendAction(#selector(AppDelegate.showAbout), to: NSApp.delegate, from: nil)
+                }
                 Divider()
                 Button("Quit DropConvert") { NSApp.terminate(nil) }
             } label: {
@@ -212,6 +217,10 @@ struct ContentView: View {
             .frame(maxHeight: 260)
             .fixedSize(horizontal: false, vertical: queue.jobs.count < 5)
         }
+    }
+
+    private var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2.1"
     }
 
     private var parsedLinks: [URL] { Downloader.links(in: linkText) }

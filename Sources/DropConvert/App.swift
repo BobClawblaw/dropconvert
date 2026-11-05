@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
     private let popover = NSPopover()
     private var progressObserver: Any?
     private var mainWindow: NSWindow?
+    private var aboutWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         makeMainMenu()
@@ -83,6 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         if CommandLine.arguments.contains("--window") {
             DispatchQueue.main.async { [weak self] in self?.showMainWindow() }
         }
+        if CommandLine.arguments.contains("--about") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.showAbout() }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -140,9 +144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
             rootView: ContentView(close: { [weak window] in window?.close() })
                 .environmentObject(queue)
                 .environmentObject(settings))
-        hosting.sizingOptions = []
+        hosting.sizingOptions = [.preferredContentSize]
         window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 360, height: 650))
         // `center()` follows the app's current screen, which can be a
         // secondary display. Pin the window to the main display instead.
         if let screen = NSScreen.screens.first {
@@ -160,11 +163,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         showMainWindow()
     }
 
+    @objc func showAbout() {
+        if let window = aboutWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 400),
+                              styleMask: [.titled, .closable],
+                              backing: .buffered, defer: false)
+        window.title = "About DropConvert"
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingController(rootView: AboutView(close: { [weak window] in window?.close() }))
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 440, height: 400))
+        if let screen = NSScreen.screens.first {
+            let visible = screen.visibleFrame
+            let size = window.frame.size
+            window.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2,
+                                          y: visible.midY - size.height / 2))
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        aboutWindow = window
+    }
+
     private func makeMainMenu() {
         let mainMenu = NSMenu()
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
+        let about = NSMenuItem(title: "About DropConvert", action: #selector(showAbout),
+                               keyEquivalent: "")
+        about.target = self
+        appMenu.addItem(about)
+        appMenu.addItem(.separator())
         let show = NSMenuItem(title: "Show DropConvert", action: #selector(showMainWindowAction),
                               keyEquivalent: "")
         show.target = self
