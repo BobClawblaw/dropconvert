@@ -116,7 +116,7 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            TextField("One URL per line — YouTube, Vimeo, … · ⌘V or Ctrl-V",
+            TextField("One URL per line — ⌘V or Ctrl-V",
                       text: $linkText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(.caption, design: .monospaced))
