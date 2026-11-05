@@ -29,13 +29,19 @@ the menu bar is full, the window opens instead; reopen it from the Dock icon or 
 
 - **GitHub release:** [latest macOS build](https://github.com/BobClawblaw/dropconvert/releases). Each DMG ships with a
   SHA-256 checksum.
-- **Homebrew:** `brew install --cask bobclawblaw/tap/dropconvert`. This avoids the quarantine prompt and updates with
-  `brew upgrade --cask dropconvert`.
+- **Homebrew:** trust the tap once, then install:
+
+  ```sh
+  brew trust bobclawblaw/tap
+  brew install --cask bobclawblaw/tap/dropconvert
+  ```
+
+  Updates come with `brew upgrade --cask dropconvert`.
 
 The GitHub build is ad-hoc signed unless a Developer ID identity is configured. On macOS 15 and later, if macOS blocks
 the app, open **System Settings → Privacy & Security**, scroll to the message about DropConvert, and click **Open
-Anyway**. (The old right-click → Open shortcut no longer overrides Gatekeeper.) Homebrew installs skip this because
-Homebrew doesn't set the quarantine attribute.
+Anyway**. (The old right-click → Open shortcut no longer overrides Gatekeeper.) Homebrew installs usually avoid the
+prompt, but if macOS still blocks one, use the same Open Anyway flow.
 
 Verify a download with:
 
