@@ -6,9 +6,9 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject var queue: ConversionQueue
     @EnvironmentObject var settings: Settings
+    @EnvironmentObject var linkDraft: LinkDraft
     let close: () -> Void
     @State private var targeted = false
-    @State private var linkText = ""
     @FocusState private var linkFocused: Bool
     @State private var detailJob: Job?
 
@@ -153,13 +153,13 @@ struct ContentView: View {
                 Image(systemName: "link").foregroundStyle(.secondary)
                 Text("Paste video links").font(.callout.weight(.medium))
                 Spacer()
-                if !linkText.isEmpty {
+                if !linkDraft.text.isEmpty {
                     Text("\(links.count) \(links.count == 1 ? "link" : "links")")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
             TextField("One URL per line — ⌘V or Ctrl-V",
-                      text: $linkText, axis: .vertical)
+                      text: $linkDraft.text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(.caption, design: .monospaced))
                 .lineLimit(3...5)
@@ -280,26 +280,23 @@ struct ContentView: View {
         }
     }
 
-    private var parsedLinks: [URL] { Downloader.links(in: linkText) }
+    private var parsedLinks: [URL] { Downloader.links(in: linkDraft.text) }
 
     private var downloadFolderName: String {
         settings.outputFolder?.lastPathComponent ?? "Downloads"
     }
 
     private func pasteLinks() {
-        guard let string = NSPasteboard.general.string(forType: .string) else { return }
-        if linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            linkText = string
-        } else {
-            linkText += "\n" + string
-        }
+        linkDraft.appendClipboard()
+        linkFocused = true
     }
 
     private func addLinks() {
         let links = parsedLinks
         guard !links.isEmpty else { return }
         queue.addLinks(links)
-        linkText = ""
+        linkDraft.text = ""
+        linkFocused = true
     }
 
     private func chooseFiles() {

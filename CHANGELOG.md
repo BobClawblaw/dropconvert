@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.1] - 2026-11-05
+
+### Fixed
+
+- Ctrl+V now appends clipboard links even when the link box has lost focus. Previously it relied on the
+  responder chain, so a paste could silently go nowhere until the Paste button was used. Ctrl+V and the
+  Paste button now share the same link draft, and standard paste still replaces selected text when the
+  field is focused.
+
 ## [1.3.0] - 2026-11-05
 
 ### Added

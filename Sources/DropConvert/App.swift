@@ -19,6 +19,7 @@ enum DropConvertMain {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDraggingDestination {
     let settings = Settings()
+    let linkDraft = LinkDraft()
     lazy var queue = ConversionQueue(settings: settings)
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
@@ -33,17 +34,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         // Control-V (and friends) that some people reach for.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard event.modifierFlags.contains(.control) else { return event }
-            let action: Selector?
             switch event.charactersIgnoringModifiers?.lowercased() {
-            case "v": action = #selector(NSText.paste(_:))
-            case "c": action = #selector(NSText.copy(_:))
-            case "x": action = #selector(NSText.cut(_:))
-            case "a": action = #selector(NSText.selectAll(_:))
-            default: action = nil
+            case "v":
+                // Use the field editor when it has focus (so selection is
+                // replaced normally), otherwise append to the shared draft.
+                if let responder = NSApp.keyWindow?.firstResponder,
+                   responder.tryToPerform(#selector(NSText.paste(_:)), with: nil) {
+                    return nil
+                }
+                self.linkDraft.appendClipboard()
+                return nil
+            case "c":
+                NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                return nil
+            case "x":
+                NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+                return nil
+            case "a":
+                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                return nil
+            default:
+                return event
             }
-            guard let action else { return event }
-            NSApp.sendAction(action, to: nil, from: nil)
-            return nil
         }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -63,7 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         popover.contentViewController = NSHostingController(
             rootView: ContentView(close: { [weak self] in self?.popover.performClose(nil) })
                 .environmentObject(queue)
-                .environmentObject(settings))
+                .environmentObject(settings)
+                .environmentObject(linkDraft))
 
         progressObserver = queue.objectWillChange.sink { [weak self] in
             DispatchQueue.main.async { self?.refreshIcon() }
@@ -148,7 +161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         let hosting = NSHostingController(
             rootView: ContentView(close: { [weak window] in window?.close() })
                 .environmentObject(queue)
-                .environmentObject(settings))
+                .environmentObject(settings)
+                .environmentObject(linkDraft))
         hosting.sizingOptions = [.preferredContentSize]
         window.contentViewController = hosting
         // `center()` follows the app's current screen, which can be a

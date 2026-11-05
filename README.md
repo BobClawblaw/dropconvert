@@ -46,7 +46,7 @@ prompt, but if macOS still blocks one, use the same Open Anyway flow.
 Verify a download with:
 
 ```sh
-shasum -a 256 -c DropConvert-1.3.0.dmg.sha256
+shasum -a 256 -c DropConvert-1.3.1.dmg.sha256
 ```
 
 The `.sha256` asset on the release page uses the DMG's file name, so `-c` works after downloading both files into the same folder.
