@@ -33,24 +33,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         // macOS text views use Command-V, but support the Windows-style
         // Control-V (and friends) that some people reach for.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.contains(.control) else { return event }
+            let flags = event.modifierFlags
+            guard flags.contains(.control) || flags.contains(.command) else { return event }
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "v":
-                // Use the field editor when it has focus (so selection is
-                // replaced normally), otherwise append to the shared draft.
-                if let responder = NSApp.keyWindow?.firstResponder,
-                   responder.tryToPerform(#selector(NSText.paste(_:)), with: nil) {
-                    return nil
-                }
+                // Append with a line feed instead of relying on the field
+                // editor, which would fuse a URL without a trailing newline
+                // onto the previous link.
                 self.linkDraft.appendClipboard()
                 return nil
-            case "c":
+            case "c" where flags.contains(.control):
                 NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
                 return nil
-            case "x":
+            case "x" where flags.contains(.control):
                 NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
                 return nil
-            case "a":
+            case "a" where flags.contains(.control):
                 NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
                 return nil
             default:

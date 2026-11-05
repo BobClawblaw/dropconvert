@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import DropConvertCore
 
 /// Shared text for the link box. Keeping it outside the view lets Ctrl+V work
 /// even after the field has lost focus, instead of relying on the responder chain.
@@ -10,10 +11,6 @@ final class LinkDraft: ObservableObject {
     func appendClipboard() {
         guard let string = NSPasteboard.general.string(forType: .string) else { return }
         guard !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            text = string
-        } else {
-            text += "\n" + string
-        }
+        text = LinkText.appending(string, to: text)
     }
 }

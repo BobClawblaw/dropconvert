@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2] - 2026-11-05
+
+### Fixed
+
+- Ctrl+V/Cmd+V now always inserts a line feed between the existing link box text and the clipboard
+  contents. A URL copied without a trailing newline could previously fuse onto the previous link
+  (for example, `clip.mp4https://…`), leaving the new link unparsed.
+
 ## [1.3.1] - 2026-11-05
 
 ### Fixed

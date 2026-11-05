@@ -11,7 +11,7 @@ Open a private security advisory on GitHub, or email the maintainer listed in th
 Release DMGs are published with a SHA-256 checksum. Verify it before installing:
 
 ```sh
-shasum -a 256 DropConvert-1.3.1.dmg
+shasum -a 256 DropConvert-1.3.2.dmg
 ```
 
 Compare the result with the `.sha256` asset on the release page. Builds are ad-hoc signed unless a Developer ID identity is configured; see the README for Gatekeeper guidance.
