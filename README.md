@@ -1,7 +1,11 @@
 # DropConvert
 
-A small macOS menu-bar app: drop a video or image on its icon (or into its popover) and it converts the file to the
-format you picked, using ffmpeg. The result lands beside the original, or in a folder you choose.
+A small macOS app: drop a video or image on its menu-bar icon (or into its popover) and it converts the file to the
+format you picked, using ffmpeg. You can also paste a list of video links — YouTube and other yt-dlp sites — to
+download and convert them. Results land beside the original, in a folder you choose, or in Downloads for links.
+
+The app also has a Dock icon and a regular window with the same controls. If macOS hides the menu-bar item because
+the menu bar is full, the window opens instead; reopen it from the Dock icon or the DropConvert menu.
 
 ## Formats
 
@@ -10,16 +14,26 @@ format you picked, using ffmpeg. The result lands beside the original, or in a f
 | Video | MP4 (H.264, HEVC, AV1), MOV (H.264, HEVC, ProRes 422), M4V, MKV (H.264, HEVC), WebM (VP9, AV1), AVI (MPEG-4 Part 2), MPG (MPEG-2), MPEG-TS, FLV, 3GP, WMV, OGV (Theora) |
 | Still image | JPG, PNG, WebP, TIFF, BMP, QOI |
 | Animated image | GIF (two-pass palette) |
-| Audio only | MP3, M4A (AAC), WAV, FLAC |
+| Audio only | MP3, M4A (AAC), WAV, AIFF, FLAC |
 
 Only formats your ffmpeg build can encode are listed (Homebrew's ffmpeg has no Theora encoder, for example, so OGV
 stays hidden).
 
+## Links
+
+Paste links into the "Paste video links" box in the popover — one per line, or separated by spaces or commas — then
+press Download. Each link is fetched with yt-dlp and converted to the format selected above, so MP4, AIFF and WAV are
+all one click away. A playlist link downloads just the video it points at; paste individual links to queue several.
+
+Downloads are staged in a temporary folder and removed when the conversion finishes or is cancelled. Converted links
+go to your chosen output folder, or to Downloads when no folder is set. They are named after the video title and
+numbered when a file with that name already exists.
+
 ## Options
 
 - **Quality:** Low / Medium / High, mapped to each encoder's own scale (CRF for x264/x265/VP9/AV1, `-q:v` for
-  VideoToolbox and the MPEG-family encoders, profile for ProRes, bitrate for audio). Lossless image formats (PNG,
-  TIFF, BMP, QOI) have no quality setting, so the control is hidden for them.
+  VideoToolbox and the MPEG-family encoders, profile for ProRes, bitrate for audio). Lossless formats (PNG, TIFF,
+  BMP, QOI, WAV, AIFF, FLAC) have no quality setting, so the control is hidden for them.
 - **Size:** Original, 2160p, 1080p, 720p or 480p — the longest side, which is never upscaled. For video, odd
   dimensions are trimmed to even ones so 4:2:0 encoders accept them; still images keep odd sizes (lossless formats)
   unless a smaller target is chosen.
@@ -29,15 +43,17 @@ stays hidden).
   turn it off for libx264/libx265, which give smaller files at the same quality.
 - Gear menu: output folder, show in Finder when done, launch at login.
 
-Files convert one at a time, in drop order. Each one shows progress and can be cancelled or retried. A failed or
-cancelled conversion leaves no partial file. Existing files are never overwritten: `clip.mp4` becomes `clip 2.mp4`.
-DropConvert is also registered as an "Open With" app for videos and images in Finder.
+Files and links convert one at a time, in the order they were added. Each one shows progress and can be cancelled or
+retried. A failed or cancelled job leaves no partial file. Existing files are never overwritten: `clip.mp4` becomes
+`clip 2.mp4`. DropConvert is also registered as an "Open With" app for videos and images in Finder, and accepts
+dropped links.
 
 ## Requirements
 
 - macOS 14 or later
 - ffmpeg (`brew install ffmpeg`). DropConvert looks in `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin` and
   `PATH`.
+- yt-dlp (`brew install yt-dlp`) to download links.
 - Xcode command-line tools with Swift 5.10 or later, to build
 
 ## Build

@@ -223,8 +223,14 @@ extension OutputFormat {
         OutputFormat(id: "m4a", name: "M4A · AAC", ext: "m4a", kind: .audio,
                      encoders: ["aac"], hardwareEncoder: nil) { aac($0) },
         OutputFormat(id: "wav", name: "WAV", ext: "wav", kind: .audio,
-                     encoders: ["pcm_s16le"], hardwareEncoder: nil) { _ in ["-c:a", "pcm_s16le"] },
+                     encoders: ["pcm_s16le"], hardwareEncoder: nil, hasQuality: false) { _ in
+            ["-c:a", "pcm_s16le"]
+        },
+        OutputFormat(id: "aiff", name: "AIFF", ext: "aiff", kind: .audio,
+                     encoders: ["pcm_s16be"], hardwareEncoder: nil, hasQuality: false) { _ in
+            ["-c:a", "pcm_s16be"]
+        },
         OutputFormat(id: "flac", name: "FLAC", ext: "flac", kind: .audio,
-                     encoders: ["flac"], hardwareEncoder: nil) { _ in ["-c:a", "flac"] },
+                     encoders: ["flac"], hardwareEncoder: nil, hasQuality: false) { _ in ["-c:a", "flac"] },
     ]
 }

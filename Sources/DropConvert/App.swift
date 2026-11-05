@@ -8,7 +8,9 @@ enum DropConvertMain {
 
     static func main() {
         let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
+        // A Dock icon and app menu make the app reachable even when macOS
+        // hides the menu-bar item in a crowded menu bar.
+        app.setActivationPolicy(.regular)
         app.delegate = delegate
         app.run()
     }
@@ -21,18 +23,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var progressObserver: Any?
+    private var mainWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        makeMainMenu()
+
+        // macOS text views use Command-V, but support the Windows-style
+        // Control-V (and friends) that some people reach for.
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.contains(.control) else { return event }
+            let action: Selector?
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "v": action = Selector(("paste:"))
+            case "c": action = Selector(("copy:"))
+            case "x": action = Selector(("cut:"))
+            case "a": action = Selector(("selectAll:"))
+            default: action = nil
+            }
+            guard let action else { return event }
+            NSApp.sendAction(action, to: nil, from: nil)
+            return nil
+        }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem.button else { return }
         button.image = Self.icon(busy: false)
-        button.toolTip = "DropConvert: drop videos or images here to convert them"
+        button.toolTip = "DropConvert: drop videos or images, or paste video links"
         button.target = self
         button.action = #selector(togglePopover)
 
         // The status button's window takes the drop; NSWindow hands drag
         // events to a delegate that implements NSDraggingDestination.
-        button.window?.registerForDraggedTypes([.fileURL])
+        button.window?.registerForDraggedTypes([.fileURL, .URL])
         button.window?.delegate = self
 
         popover.behavior = .transient
@@ -45,10 +67,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         progressObserver = queue.objectWillChange.sink { [weak self] in
             DispatchQueue.main.async { self?.refreshIcon() }
         }
+
+        // If the menu bar is full, macOS parks the status item off-screen.
+        // Open the regular window instead so the app stays usable.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, !self.statusItemIsVisible else { return }
+            self.showMainWindow()
+        }
+
+        // `--show` opens the popover at launch, which is handy for screenshots
+        // and for launching the app from a script.
+        if CommandLine.arguments.contains("--show") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.showPopover() }
+        }
+        if CommandLine.arguments.contains("--window") {
+            DispatchQueue.main.async { [weak self] in self?.showMainWindow() }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showMainWindow()
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        queue.add(urls)
+        let files = urls.filter(\.isFileURL)
+        let links = urls.filter { !$0.isFileURL }
+        if !files.isEmpty { queue.add(files) }
+        if !links.isEmpty { queue.addLinks(links) }
         showPopover()
     }
 
@@ -56,11 +106,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         popover.isShown ? popover.performClose(nil) : showPopover()
     }
 
+    private var statusItemIsVisible: Bool {
+        guard let frame = statusItem.button?.window?.frame else { return false }
+        return NSScreen.screens.contains { $0.frame.intersects(frame) }
+    }
+
     private func showPopover() {
         guard let button = statusItem.button, !popover.isShown else { return }
-        NSApp.activate()
+        guard statusItemIsVisible else {
+            showMainWindow()
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+    }
+
+    /// The same controls in a regular window, opened from the Dock icon, the
+    /// app menu, or when the menu-bar item is hidden.
+    private func showMainWindow() {
+        if let window = mainWindow {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 680),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                              backing: .buffered, defer: false)
+        window.title = "DropConvert"
+        window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 360, height: 420)
+        let hosting = NSHostingController(
+            rootView: ContentView(close: { [weak window] in window?.close() })
+                .environmentObject(queue)
+                .environmentObject(settings))
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 360, height: 650))
+        // `center()` follows the app's current screen, which can be a
+        // secondary display. Pin the window to the main display instead.
+        if let screen = NSScreen.screens.first {
+            let visible = screen.visibleFrame
+            let size = window.frame.size
+            window.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2,
+                                          y: visible.midY - size.height / 2))
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        mainWindow = window
+    }
+
+    @objc private func showMainWindowAction() {
+        showMainWindow()
+    }
+
+    private func makeMainMenu() {
+        let mainMenu = NSMenu()
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        let show = NSMenuItem(title: "Show DropConvert", action: #selector(showMainWindowAction),
+                              keyEquivalent: "")
+        show.target = self
+        appMenu.addItem(show)
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit DropConvert",
+                        action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: Selector(("cut:")), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: Selector(("copy:")), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: Selector(("paste:")), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: Selector(("selectAll:")), keyEquivalent: "a")
+        editItem.submenu = editMenu
+
+        NSApp.mainMenu = mainMenu
     }
 
     private func refreshIcon() {
@@ -76,13 +202,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
 
     // MARK: Drops on the menu-bar icon
 
-    private func fileURLs(_ info: NSDraggingInfo) -> [URL] {
-        info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
-                                            options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    private func droppedURLs(_ info: NSDraggingInfo) -> [URL] {
+        info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] ?? []
     }
 
     func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard !fileURLs(sender).isEmpty else { return [] }
+        guard !droppedURLs(sender).isEmpty else { return [] }
         statusItem.button?.highlight(true)
         return .copy
     }
@@ -93,9 +218,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
 
     func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         statusItem.button?.highlight(false)
-        let urls = fileURLs(sender)
-        guard !urls.isEmpty else { return false }
-        queue.add(urls)
+        let urls = droppedURLs(sender)
+        let files = urls.filter(\.isFileURL)
+        let links = urls.filter { !$0.isFileURL }
+        guard !files.isEmpty || !links.isEmpty else { return false }
+        if !files.isEmpty { queue.add(files) }
+        if !links.isEmpty { queue.addLinks(links) }
         showPopover()
         return true
     }

@@ -7,6 +7,8 @@ struct ContentView: View {
     @EnvironmentObject var settings: Settings
     let close: () -> Void
     @State private var targeted = false
+    @State private var linkText = ""
+    @FocusState private var linkFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -15,12 +17,14 @@ struct ContentView: View {
                 missingFFmpeg
             } else {
                 dropZone
+                linkSection
                 options
                 if !queue.jobs.isEmpty { jobList }
             }
         }
         .padding(14)
         .frame(width: 360)
+        .onAppear { linkFocused = true }
     }
 
     private var header: some View {
@@ -33,12 +37,14 @@ struct ContentView: View {
                 Toggle("Show in Finder when done", isOn: $settings.revealWhenDone)
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
                 Divider()
-                Button(settings.outputFolder.map { "Save to: \($0.lastPathComponent)" } ?? "Save beside the original") {}
+                Button(settings.outputFolder.map { "Save to: \($0.lastPathComponent)" } ?? "Save files beside the original") {}
                     .disabled(true)
                 Button("Choose output folder…", action: chooseFolder)
                 if settings.outputFolder != nil {
                     Button("Save beside the original") { settings.outputFolder = nil }
                 }
+                Divider()
+                Button("Check for ffmpeg and yt-dlp") { queue.relocate() }
                 Divider()
                 Button("Quit DropConvert") { NSApp.terminate(nil) }
             } label: {
@@ -70,7 +76,7 @@ struct ContentView: View {
             Image(systemName: "arrow.down.doc")
                 .font(.system(size: 28, weight: .light))
             Text("Drop videos or images here").font(.callout.weight(.medium))
-            Text("or on the menu-bar icon · click to choose")
+            Text("or paste links below · click to choose")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, minHeight: 100)
@@ -83,15 +89,68 @@ struct ContentView: View {
                               style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
         .contentShape(Rectangle())
         .onTapGesture(perform: chooseFiles)
-        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+        .onDrop(of: [.fileURL, .url], isTargeted: $targeted) { providers in
             Task { @MainActor in
-                var urls: [URL] = []
+                var files: [URL] = []
+                var links: [URL] = []
                 for provider in providers {
-                    if let url = try? await provider.loadFileURL() { urls.append(url) }
+                    guard let url = try? await provider.loadURL() else { continue }
+                    if url.isFileURL { files.append(url) } else { links.append(url) }
                 }
-                queue.add(urls)
+                if !files.isEmpty { queue.add(files) }
+                if !links.isEmpty { queue.addLinks(links) }
             }
             return true
+        }
+    }
+
+    private var linkSection: some View {
+        let links = parsedLinks
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: "link").foregroundStyle(.secondary)
+                Text("Paste video links").font(.callout.weight(.medium))
+                Spacer()
+                if !linkText.isEmpty {
+                    Text("\(links.count) \(links.count == 1 ? "link" : "links")")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            TextField("One URL per line — YouTube, Vimeo, … · ⌘V or Ctrl-V",
+                      text: $linkText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(3...5)
+                .focused($linkFocused)
+                .padding(8)
+                .frame(minHeight: 64, alignment: .topLeading)
+                .background(RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.secondary.opacity(0.06))
+                    .allowsHitTesting(false))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.secondary.opacity(0.3))
+                    .allowsHitTesting(false))
+            HStack(spacing: 8) {
+                if queue.downloader == nil {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("yt-dlp not found").font(.caption2).foregroundStyle(.orange)
+                        Text("brew install yt-dlp")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    Button("Check again") { queue.relocate() }.buttonStyle(.link)
+                } else {
+                    Text("Saves to \(downloadFolderName)")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Button("Paste") { pasteLinks() }
+                    .disabled(queue.downloader == nil)
+                Button("Download") { addLinks() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(queue.downloader == nil || links.isEmpty)
+                    .keyboardShortcut(.return, modifiers: [.command])
+            }
         }
     }
 
@@ -155,6 +214,28 @@ struct ContentView: View {
         }
     }
 
+    private var parsedLinks: [URL] { Downloader.links(in: linkText) }
+
+    private var downloadFolderName: String {
+        settings.outputFolder?.lastPathComponent ?? "Downloads"
+    }
+
+    private func pasteLinks() {
+        guard let string = NSPasteboard.general.string(forType: .string) else { return }
+        if linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            linkText = string
+        } else {
+            linkText += "\n" + string
+        }
+    }
+
+    private func addLinks() {
+        let links = parsedLinks
+        guard !links.isEmpty else { return }
+        queue.addLinks(links)
+        linkText = ""
+    }
+
     private func chooseFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -184,9 +265,19 @@ private struct JobRow: View {
         HStack(alignment: .top, spacing: 8) {
             statusIcon.frame(width: 16)
             VStack(alignment: .leading, spacing: 3) {
-                Text(job.input.lastPathComponent).lineLimit(1).truncationMode(.middle)
-                Text("→ \(job.output.lastPathComponent)")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 4) {
+                    if job.isRemote {
+                        Image(systemName: "link").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Text(job.title).lineLimit(1).truncationMode(.middle)
+                }
+                if let output = job.output {
+                    Text("→ \(output.lastPathComponent)")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                } else {
+                    Text("→ \(job.format.name) · \(job.phase == .downloading ? "download first" : "waiting")")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 detail
             }
             Spacer(minLength: 4)
@@ -207,17 +298,30 @@ private struct JobRow: View {
     @ViewBuilder private var detail: some View {
         switch job.state {
         case .queued:
-            Text("Waiting").font(.caption2).foregroundStyle(.secondary)
+            Text(job.isRemote ? "Waiting to download" : "Waiting")
+                .font(.caption2).foregroundStyle(.secondary)
         case .running(let fraction):
-            if let fraction {
-                ProgressView(value: fraction)
-                Text("\(Int(fraction * 100))% · \(Self.time(job.elapsed))")
-                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            if job.phase == .downloading {
+                if let fraction {
+                    ProgressView(value: fraction)
+                    Text("Downloading \(Int(fraction * 100))% · \(Self.time(job.elapsed))")
+                        .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                    Text("Downloading…").font(.caption2).foregroundStyle(.secondary)
+                }
             } else {
-                ProgressView().progressViewStyle(.linear)
+                if let fraction {
+                    ProgressView(value: fraction)
+                    Text("Converting \(Int(fraction * 100))% · \(Self.time(job.elapsed))")
+                        .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                    Text("Converting…").font(.caption2).foregroundStyle(.secondary)
+                }
             }
         case .done:
-            Text("Done in \(Self.time(job.elapsed))\(Self.size(job.output))")
+            Text("\(job.isRemote ? "Downloaded and converted" : "Done") in \(Self.time(job.elapsed))\(Self.size(job.output))")
                 .font(.caption2).foregroundStyle(.secondary)
         case .failed(let message):
             Text(message).font(.caption2).foregroundStyle(.red)
@@ -233,10 +337,12 @@ private struct JobRow: View {
             Button { queue.cancel(job) } label: { Image(systemName: "xmark.circle") }
                 .buttonStyle(.borderless).help("Cancel")
         case .done:
-            Button { NSWorkspace.shared.activateFileViewerSelecting([job.output]) } label: {
-                Image(systemName: "magnifyingglass.circle")
+            if let output = job.output {
+                Button { NSWorkspace.shared.activateFileViewerSelecting([output]) } label: {
+                    Image(systemName: "magnifyingglass.circle")
+                }
+                .buttonStyle(.borderless).help("Show in Finder")
             }
-            .buttonStyle(.borderless).help("Show in Finder")
         case .failed, .cancelled:
             Button { queue.retry(job) } label: { Image(systemName: "arrow.clockwise.circle") }
                 .buttonStyle(.borderless).help("Try again")
@@ -248,14 +354,15 @@ private struct JobRow: View {
         return s < 60 ? "\(s)s" : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    private static func size(_ url: URL) -> String {
-        guard let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { return "" }
+    private static func size(_ url: URL?) -> String {
+        guard let url,
+              let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { return "" }
         return " · " + ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 }
 
 private extension NSItemProvider {
-    func loadFileURL() async throws -> URL? {
+    func loadURL() async throws -> URL? {
         try await withCheckedThrowingContinuation { cont in
             _ = loadObject(ofClass: URL.self) { url, error in
                 if let error { cont.resume(throwing: error) } else { cont.resume(returning: url) }
