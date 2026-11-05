@@ -5,15 +5,11 @@ import SwiftUI
 struct AboutView: View {
     let close: () -> Void
 
-    private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2.1"
-    }
-
     var body: some View {
         VStack(spacing: 12) {
             icon
             Text("DropConvert").font(.title2.weight(.semibold))
-            Text("Version \(version)").font(.caption).foregroundStyle(.secondary)
+            Text("Version \(AppInfo.version)").font(.caption).foregroundStyle(.secondary)
             Text("Convert videos and images locally, or paste YouTube and other links to download and convert them.")
                 .font(.callout).multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -54,6 +50,8 @@ struct AboutView: View {
                 Pill("AIFF", color: .purple)
                 Pill("WAV", color: .teal)
                 Pill("MOV", color: .blue)
+                Pill("AVIF", color: .green)
+                Pill("HEIC", color: .green)
                 Spacer(minLength: 0)
             }
             HStack(spacing: 6) {

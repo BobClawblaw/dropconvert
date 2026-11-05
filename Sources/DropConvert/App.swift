@@ -35,10 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
             guard event.modifierFlags.contains(.control) else { return event }
             let action: Selector?
             switch event.charactersIgnoringModifiers?.lowercased() {
-            case "v": action = Selector(("paste:"))
-            case "c": action = Selector(("copy:"))
-            case "x": action = Selector(("cut:"))
-            case "a": action = Selector(("selectAll:"))
+            case "v": action = #selector(NSText.paste(_:))
+            case "c": action = #selector(NSText.copy(_:))
+            case "x": action = #selector(NSText.cut(_:))
+            case "a": action = #selector(NSText.selectAll(_:))
             default: action = nil
             }
             guard let action else { return event }
@@ -96,6 +96,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        queue.shutdown()
+        return .terminateNow
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -169,15 +174,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 400),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 430),
                               styleMask: [.titled, .closable],
                               backing: .buffered, defer: false)
         window.title = "About DropConvert"
         window.isReleasedWhenClosed = false
         let hosting = NSHostingController(rootView: AboutView(close: { [weak window] in window?.close() }))
-        hosting.sizingOptions = []
+        hosting.sizingOptions = [.preferredContentSize]
         window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 440, height: 400))
         if let screen = NSScreen.screens.first {
             let visible = screen.visibleFrame
             let size = window.frame.size
@@ -214,10 +218,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
         editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
         editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "Cut", action: Selector(("cut:")), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy", action: Selector(("copy:")), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: Selector(("paste:")), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Select All", action: Selector(("selectAll:")), keyEquivalent: "a")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)),
+                         keyEquivalent: "a")
         editItem.submenu = editMenu
 
         NSApp.mainMenu = mainMenu
@@ -225,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
 
     private func refreshIcon() {
         statusItem.button?.image = Self.icon(busy: queue.activeCount > 0)
+        statusItem.button?.toolTip = queue.statusText
     }
 
     private static func icon(busy: Bool) -> NSImage? {

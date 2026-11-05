@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build DMG
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+          NOTARIZE: ${{ secrets.NOTARIZE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: ./scripts/build-dmg.sh
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(cat version.txt)"
+          TAG="v$VERSION"
+          NOTES="$(awk -v version="$VERSION" '
+              $0 ~ "^## \\[" version "\\]" { flag = 1; next }
+              flag && $0 ~ "^## \\[" { flag = 0 }
+              flag { print }
+          ' CHANGELOG.md)"
+          if [ -z "$NOTES" ]; then
+            NOTES="DropConvert $VERSION"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              "build/DropConvert-$VERSION.dmg" \
+              "build/DropConvert-$VERSION.dmg.sha256" --clobber
+          else
+            gh release create "$TAG" \
+              "build/DropConvert-$VERSION.dmg" \
+              "build/DropConvert-$VERSION.dmg.sha256" \
+              --title "DropConvert $VERSION" \
+              --notes "$NOTES"
+          fi

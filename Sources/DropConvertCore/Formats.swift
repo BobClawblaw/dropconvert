@@ -1,12 +1,12 @@
 import Foundation
 
-enum Quality: String, CaseIterable, Identifiable {
+public enum Quality: String, CaseIterable, Identifiable, Codable, Sendable {
     case low, medium, high
-    var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    public var id: String { rawValue }
+    public var label: String { rawValue.capitalized }
 
     /// Picks the value for this quality from a (high, medium, low) triple.
-    func pick<T>(_ high: T, _ medium: T, _ low: T) -> T {
+    public func pick<T>(_ high: T, _ medium: T, _ low: T) -> T {
         switch self {
         case .high: high
         case .medium: medium
@@ -15,47 +15,86 @@ enum Quality: String, CaseIterable, Identifiable {
     }
 }
 
-enum Resolution: Int, CaseIterable, Identifiable {
+public enum Resolution: Int, CaseIterable, Identifiable, Codable, Sendable {
     case original = 0, p2160 = 2160, p1080 = 1080, p720 = 720, p480 = 480
-    var id: Int { rawValue }
-    var label: String { self == .original ? "Original" : "\(rawValue)p" }
+    public var id: Int { rawValue }
+    public var label: String { self == .original ? "Original" : "\(rawValue)p" }
+}
+
+/// How a format is produced: ffmpeg or macOS ImageIO.
+public enum OutputEngine: String, Codable, Sendable, Equatable {
+    case ffmpeg
+    case imageIO
 }
 
 /// What one conversion needs to know besides the files.
-struct EncodeOptions {
-    var quality: Quality
-    var resolution: Resolution
-    var hardware: Bool
-    var remux: Bool
-    var encoders: Set<String>
+public struct EncodeOptions: Sendable {
+    public var quality: Quality
+    public var resolution: Resolution
+    public var hardware: Bool
+    public var remux: Bool
+    public var encoders: Set<String>
 
-    func has(_ encoder: String) -> Bool { encoders.contains(encoder) }
-}
-
-struct OutputFormat: Identifiable, Hashable {
-    enum Kind: String { case video = "Video", still = "Still image", image = "Animated image", audio = "Audio only" }
-
-    let id: String
-    let name: String
-    let ext: String
-    let kind: Kind
-    /// Encoders the software path needs; the format is offered when these exist
-    /// or when `hardwareEncoder` does.
-    let encoders: [String]
-    let hardwareEncoder: String?
-    /// Whether the Quality control is meaningful (false for lossless image formats).
-    var hasQuality: Bool = true
-    /// Codec arguments (after `-i input`, before the output path).
-    let build: (EncodeOptions) -> [String]
-
-    var canRemux: Bool { kind == .video || kind == .audio }
-
-    func isAvailable(_ encoders: Set<String>) -> Bool {
-        self.encoders.allSatisfy(encoders.contains) || hardwareEncoder.map(encoders.contains) == true
+    public init(quality: Quality, resolution: Resolution, hardware: Bool,
+                remux: Bool, encoders: Set<String>) {
+        self.quality = quality
+        self.resolution = resolution
+        self.hardware = hardware
+        self.remux = remux
+        self.encoders = encoders
     }
 
-    /// Full ffmpeg argument list for one file.
-    func arguments(input: String, output: String, options o: EncodeOptions) -> [String] {
+    public func has(_ encoder: String) -> Bool { encoders.contains(encoder) }
+}
+
+public struct OutputFormat: Identifiable, Hashable, @unchecked Sendable {
+    public enum Kind: String, Codable, Sendable, Hashable {
+        case video = "Video"
+        case still = "Still image"
+        case image = "Animated image"
+        case audio = "Audio only"
+    }
+
+    public let id: String
+    public let name: String
+    public let ext: String
+    public let kind: Kind
+    /// Encoders the software path needs; the format is offered when these exist
+    /// or when `hardwareEncoder` does.
+    public let encoders: [String]
+    public let hardwareEncoder: String?
+    /// Whether the Quality control is meaningful (false for lossless formats).
+    public let hasQuality: Bool
+    public let engine: OutputEngine
+    /// Codec arguments (after `-i input`, before the output path).
+    public let build: (EncodeOptions) -> [String]
+
+    public init(id: String, name: String, ext: String, kind: Kind,
+                encoders: [String], hardwareEncoder: String?,
+                hasQuality: Bool = true, engine: OutputEngine = .ffmpeg,
+                build: @escaping (EncodeOptions) -> [String]) {
+        self.id = id
+        self.name = name
+        self.ext = ext
+        self.kind = kind
+        self.encoders = encoders
+        self.hardwareEncoder = hardwareEncoder
+        self.hasQuality = hasQuality
+        self.engine = engine
+        self.build = build
+    }
+
+    public var canRemux: Bool { engine == .ffmpeg && (kind == .video || kind == .audio) }
+
+    public func isAvailable(_ encoders: Set<String>) -> Bool {
+        if engine == .imageIO { return NativeImage.supports(ext) }
+        return self.encoders.allSatisfy(encoders.contains)
+            || hardwareEncoder.map(encoders.contains) == true
+    }
+
+    /// Full ffmpeg argument list for one file. ImageIO formats ignore this.
+    public func arguments(input: String, output: String, options o: EncodeOptions) -> [String] {
+        guard engine == .ffmpeg else { return [] }
         var args = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error",
                     "-progress", "pipe:1", "-nostats", "-i", input]
         if o.remux && canRemux {
@@ -72,8 +111,8 @@ struct OutputFormat: Identifiable, Hashable {
         return args + [output]
     }
 
-    static func == (a: OutputFormat, b: OutputFormat) -> Bool { a.id == b.id }
-    func hash(into h: inout Hasher) { h.combine(id) }
+    public static func == (a: OutputFormat, b: OutputFormat) -> Bool { a.id == b.id }
+    public func hash(into h: inout Hasher) { h.combine(id) }
 }
 
 // MARK: - Codec building blocks
@@ -147,7 +186,7 @@ private func hevcFormat(_ id: String, _ name: String, _ ext: String) -> OutputFo
     }
 }
 
-extension OutputFormat {
+public extension OutputFormat {
     /// Hardware when asked for and present, or when the software encoder is missing.
     static func hw(_ software: String, _ hardware: String, _ o: EncodeOptions) -> Bool {
         o.has(hardware) && (o.hardware || !o.has(software))
@@ -203,6 +242,10 @@ extension OutputFormat {
                      encoders: ["png"], hardwareEncoder: nil, hasQuality: false) { png($0) },
         OutputFormat(id: "webp", name: "WebP", ext: "webp", kind: .still,
                      encoders: ["libwebp"], hardwareEncoder: nil) { webp($0) },
+        OutputFormat(id: "avif", name: "AVIF", ext: "avif", kind: .still,
+                     encoders: [], hardwareEncoder: nil, engine: .imageIO) { _ in [] },
+        OutputFormat(id: "heic", name: "HEIC", ext: "heic", kind: .still,
+                     encoders: [], hardwareEncoder: nil, engine: .imageIO) { _ in [] },
         OutputFormat(id: "tiff", name: "TIFF", ext: "tiff", kind: .still,
                      encoders: ["tiff"], hardwareEncoder: nil, hasQuality: false) { tiff($0) },
         OutputFormat(id: "bmp", name: "BMP", ext: "bmp", kind: .still,
@@ -222,6 +265,8 @@ extension OutputFormat {
                      encoders: ["libmp3lame"], hardwareEncoder: nil) { mp3($0) },
         OutputFormat(id: "m4a", name: "M4A · AAC", ext: "m4a", kind: .audio,
                      encoders: ["aac"], hardwareEncoder: nil) { aac($0) },
+        OutputFormat(id: "m4a-alac", name: "M4A · ALAC", ext: "m4a", kind: .audio,
+                     encoders: ["alac"], hardwareEncoder: nil, hasQuality: false) { _ in ["-c:a", "alac"] },
         OutputFormat(id: "wav", name: "WAV", ext: "wav", kind: .audio,
                      encoders: ["pcm_s16le"], hardwareEncoder: nil, hasQuality: false) { _ in
             ["-c:a", "pcm_s16le"]
@@ -230,6 +275,12 @@ extension OutputFormat {
                      encoders: ["pcm_s16be"], hardwareEncoder: nil, hasQuality: false) { _ in
             ["-c:a", "pcm_s16be"]
         },
+        OutputFormat(id: "caf", name: "CAF", ext: "caf", kind: .audio,
+                     encoders: ["pcm_s16le"], hardwareEncoder: nil, hasQuality: false) { _ in
+            ["-c:a", "pcm_s16le"]
+        },
+        OutputFormat(id: "ogg-opus", name: "OGG · Opus", ext: "ogg", kind: .audio,
+                     encoders: ["libopus"], hardwareEncoder: nil) { opus($0) },
         OutputFormat(id: "flac", name: "FLAC", ext: "flac", kind: .audio,
                      encoders: ["flac"], hardwareEncoder: nil, hasQuality: false) { _ in ["-c:a", "flac"] },
     ]

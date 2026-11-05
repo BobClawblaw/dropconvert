@@ -1,4 +1,5 @@
 import AppKit
+import DropConvertCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -9,11 +10,14 @@ struct ContentView: View {
     @State private var targeted = false
     @State private var linkText = ""
     @FocusState private var linkFocused: Bool
+    @State private var detailJob: Job?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if queue.ffmpeg == nil {
+            if queue.isLocating {
+                locating
+            } else if queue.ffmpeg == nil {
                 missingFFmpeg
             } else {
                 dropZone
@@ -23,22 +27,43 @@ struct ContentView: View {
             }
         }
         .padding(14)
-        .frame(width: 360)
+        .frame(minWidth: 360, idealWidth: 360, maxWidth: .infinity)
         .onAppear { linkFocused = true }
+        .sheet(item: $detailJob) { job in
+            JobDetailView(job: job)
+        }
     }
 
     private var header: some View {
         HStack {
             Image(systemName: "film.stack").foregroundStyle(.secondary)
             Text("DropConvert").font(.headline)
-            Text("v\(version)").font(.caption2).foregroundStyle(.secondary)
+            Text(AppInfo.versionLine).font(.caption2).foregroundStyle(.secondary)
             Spacer()
             Menu {
                 Toggle("Use hardware encoder (VideoToolbox)", isOn: $settings.hardware)
                 Toggle("Show in Finder when done", isOn: $settings.revealWhenDone)
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
                 Divider()
-                Button(settings.outputFolder.map { "Save to: \($0.lastPathComponent)" } ?? "Save files beside the original") {}
+                Menu("Cookies for sign-in") {
+                    ForEach(CookieBrowser.allCases) { browser in
+                        Button(settings.cookiesBrowser == browser
+                               ? "✓ \(browser.label)" : browser.label) {
+                            settings.cookiesBrowser = browser
+                        }
+                    }
+                }
+                Toggle("Download full playlists", isOn: $settings.downloadPlaylists)
+                Toggle("Embed English subtitles", isOn: $settings.embedSubtitles)
+                Divider()
+                Button(queue.isUpdatingDownloader ? "Updating yt-dlp…" : "Update yt-dlp…") {
+                    queue.updateDownloader()
+                }
+                .disabled(queue.downloader == nil || queue.isUpdatingDownloader)
+                Button("Copy diagnostics") { copyDiagnostics() }
+                Divider()
+                Button(settings.outputFolder.map { "Save to: \($0.lastPathComponent)" }
+                       ?? "Save files beside the original") {}
                     .disabled(true)
                 Button("Choose output folder…", action: chooseFolder)
                 if settings.outputFolder != nil {
@@ -58,7 +83,17 @@ struct ContentView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .accessibilityLabel("Settings")
         }
+    }
+
+    private var locating: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Looking for ffmpeg and yt-dlp…")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 100)
     }
 
     private var missingFFmpeg: some View {
@@ -68,6 +103,7 @@ struct ContentView: View {
             Text("DropConvert uses ffmpeg to convert. Install it with Homebrew, then check again:")
                 .font(.callout).foregroundStyle(.secondary)
             Text("brew install ffmpeg").font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+            Text("brew install yt-dlp").font(.system(.callout, design: .monospaced)).textSelection(.enabled)
             HStack {
                 Button("Check again") { queue.relocate() }
                 Spacer()
@@ -80,7 +116,7 @@ struct ContentView: View {
         VStack(spacing: 6) {
             Image(systemName: "arrow.down.doc")
                 .font(.system(size: 28, weight: .light))
-            Text("Drop videos or images here").font(.callout.weight(.medium))
+            Text("Drop videos, images, or folders here").font(.callout.weight(.medium))
             Text("or paste links below · click to choose")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -107,6 +143,7 @@ struct ContentView: View {
             }
             return true
         }
+        .accessibilityLabel("Drop videos, images, or folders")
     }
 
     private var linkSection: some View {
@@ -135,6 +172,7 @@ struct ContentView: View {
                 .overlay(RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(Color.secondary.opacity(0.3))
                     .allowsHitTesting(false))
+                .accessibilityLabel("Video links, one per line")
             HStack(spacing: 8) {
                 if queue.downloader == nil {
                     VStack(alignment: .leading, spacing: 1) {
@@ -145,16 +183,25 @@ struct ContentView: View {
                     }
                     Button("Check again") { queue.relocate() }.buttonStyle(.link)
                 } else {
-                    Text("Saves to \(downloadFolderName)")
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Saves to \(downloadFolderName)")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        if let version = queue.downloader?.version {
+                            Text("yt-dlp \(version)")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
                 }
                 Spacer()
                 Button("Paste") { pasteLinks() }
-                    .disabled(queue.downloader == nil)
                 Button("Download") { addLinks() }
                     .buttonStyle(.borderedProminent)
                     .disabled(queue.downloader == nil || links.isEmpty)
                     .keyboardShortcut(.return, modifiers: [.command])
+            }
+            if let message = queue.downloaderUpdateMessage {
+                Text(message).font(.caption2).foregroundStyle(.secondary)
+                    .lineLimit(2).textSelection(.enabled)
             }
         }
     }
@@ -193,6 +240,11 @@ struct ContentView: View {
                 Toggle("Copy streams (no re-encode)", isOn: $settings.remux)
                     .toggleStyle(.checkbox)
             }
+            if format?.engine == .imageIO {
+                Text("HEIC and AVIF are written with macOS ImageIO. Videos use their first frame.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -201,7 +253,14 @@ struct ContentView: View {
             Divider()
             HStack {
                 Text("Queue").font(.subheadline.weight(.semibold))
+                if queue.isPaused {
+                    Text("Paused").font(.caption).foregroundStyle(.orange)
+                }
                 Spacer()
+                Button(queue.isPaused ? "Resume" : "Pause") {
+                    queue.setPaused(!queue.isPaused)
+                }
+                .buttonStyle(.link)
                 if queue.activeCount > 0 {
                     Button("Cancel all") { queue.cancelAll() }.buttonStyle(.link)
                 }
@@ -211,16 +270,14 @@ struct ContentView: View {
             }
             ScrollView {
                 VStack(spacing: 8) {
-                    ForEach(queue.jobs) { JobRow(job: $0) }
+                    ForEach(queue.jobs) { job in
+                        JobRow(job: job) { detailJob = $0 }
+                    }
                 }
             }
-            .frame(maxHeight: 260)
+            .frame(maxHeight: 280)
             .fixedSize(horizontal: false, vertical: queue.jobs.count < 5)
         }
-    }
-
-    private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.2.1"
     }
 
     private var parsedLinks: [URL] { Downloader.links(in: linkText) }
@@ -248,9 +305,9 @@ struct ContentView: View {
     private func chooseFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.allowedContentTypes = [.movie, .video, .audiovisualContent, .audio, .image]
-        panel.message = "Choose videos or images to convert"
+        panel.message = "Choose videos, images, or folders to convert"
         NSApp.activate()
         if panel.runModal() == .OK { queue.add(panel.urls) }
     }
@@ -264,11 +321,18 @@ struct ContentView: View {
         NSApp.activate()
         if panel.runModal() == .OK, let url = panel.url { settings.outputFolder = url }
     }
+
+    private func copyDiagnostics() {
+        let text = Diagnostics.text(queue: queue, settings: settings)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
 }
 
 private struct JobRow: View {
     @EnvironmentObject var queue: ConversionQueue
     @ObservedObject var job: Job
+    let onDetails: (Job) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -288,19 +352,34 @@ private struct JobRow: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 detail
+                if let note = job.note {
+                    Text(note).font(.caption2).foregroundStyle(.orange)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 4)
             actions
         }
+        .contextMenu { menuItems }
     }
 
     @ViewBuilder private var statusIcon: some View {
         switch job.state {
-        case .queued: Image(systemName: "clock").foregroundStyle(.secondary)
-        case .running: ProgressView().controlSize(.small)
-        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failed: Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
-        case .cancelled: Image(systemName: "minus.circle").foregroundStyle(.secondary)
+        case .queued:
+            Image(systemName: "clock").foregroundStyle(.secondary)
+                .accessibilityLabel("Queued")
+        case .running:
+            ProgressView().controlSize(.small)
+                .accessibilityLabel(job.phase == .downloading ? "Downloading" : "Converting")
+        case .done:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                .accessibilityLabel("Done")
+        case .failed:
+            Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                .accessibilityLabel("Failed")
+        case .cancelled:
+            Image(systemName: "minus.circle").foregroundStyle(.secondary)
+                .accessibilityLabel("Cancelled")
         }
     }
 
@@ -310,31 +389,25 @@ private struct JobRow: View {
             Text(job.isRemote ? "Waiting to download" : "Waiting")
                 .font(.caption2).foregroundStyle(.secondary)
         case .running(let fraction):
-            if job.phase == .downloading {
-                if let fraction {
-                    ProgressView(value: fraction)
-                    Text("Downloading \(Int(fraction * 100))% · \(Self.time(job.elapsed))")
-                        .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                } else {
-                    ProgressView().progressViewStyle(.linear)
-                    Text("Downloading…").font(.caption2).foregroundStyle(.secondary)
-                }
+            if let fraction {
+                ProgressView(value: fraction)
             } else {
-                if let fraction {
-                    ProgressView(value: fraction)
-                    Text("Converting \(Int(fraction * 100))% · \(Self.time(job.elapsed))")
-                        .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                } else {
-                    ProgressView().progressViewStyle(.linear)
-                    Text("Converting…").font(.caption2).foregroundStyle(.secondary)
-                }
+                ProgressView().progressViewStyle(.linear)
+            }
+            if let text = job.detail {
+                Text(text).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
             }
         case .done:
             Text("\(job.isRemote ? "Downloaded and converted" : "Done") in \(Self.time(job.elapsed))\(Self.size(job.output))")
                 .font(.caption2).foregroundStyle(.secondary)
         case .failed(let message):
             Text(message).font(.caption2).foregroundStyle(.red)
-                .lineLimit(3).textSelection(.enabled)
+                .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if job.errorDetails != nil {
+                Button("Details") { onDetails(job) }
+                    .buttonStyle(.link).font(.caption2)
+            }
         case .cancelled:
             Text("Cancelled").font(.caption2).foregroundStyle(.secondary)
         }
@@ -344,18 +417,41 @@ private struct JobRow: View {
         switch job.state {
         case .queued, .running:
             Button { queue.cancel(job) } label: { Image(systemName: "xmark.circle") }
-                .buttonStyle(.borderless).help("Cancel")
+                .buttonStyle(.borderless).help("Cancel").accessibilityLabel("Cancel")
         case .done:
             if let output = job.output {
                 Button { NSWorkspace.shared.activateFileViewerSelecting([output]) } label: {
                     Image(systemName: "magnifyingglass.circle")
                 }
-                .buttonStyle(.borderless).help("Show in Finder")
+                .buttonStyle(.borderless).help("Show in Finder").accessibilityLabel("Show in Finder")
             }
         case .failed, .cancelled:
             Button { queue.retry(job) } label: { Image(systemName: "arrow.clockwise.circle") }
-                .buttonStyle(.borderless).help("Try again")
+                .buttonStyle(.borderless).help("Try again").accessibilityLabel("Try again")
         }
+        Menu {
+            menuItems
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("More actions")
+        .accessibilityLabel("More actions")
+    }
+
+    @ViewBuilder private var menuItems: some View {
+        Menu("Convert to") {
+            ForEach(queue.availableFormats) { format in
+                Button(format.name) { queue.changeFormat(job, id: format.id) }
+            }
+        }
+        Divider()
+        Button("Move up") { queue.move(job, by: -1) }
+        Button("Move down") { queue.move(job, by: 1) }
+        Divider()
+        Button("Remove") { queue.remove(job) }
     }
 
     private static func time(_ t: TimeInterval) -> String {
@@ -370,8 +466,42 @@ private struct JobRow: View {
     }
 }
 
+private struct JobDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    let job: Job
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(job.title).font(.headline)
+            Text(job.source.url.absoluteString)
+                .font(.caption).foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            if let note = job.note {
+                Text(note).font(.caption).foregroundStyle(.orange)
+            }
+            ScrollView {
+                Text(job.errorDetails ?? "No extra details.")
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(job.errorDetails ?? "", forType: .string)
+                }
+                .disabled(job.errorDetails == nil)
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 480, minHeight: 300)
+    }
+}
+
 private extension NSItemProvider {
-    func loadURL() async throws -> URL? {
+    @MainActor func loadURL() async throws -> URL? {
         try await withCheckedThrowingContinuation { cont in
             _ = loadObject(ofClass: URL.self) { url, error in
                 if let error { cont.resume(throwing: error) } else { cont.resume(returning: url) }
