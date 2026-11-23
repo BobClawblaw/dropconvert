@@ -485,7 +485,6 @@ final class ConversionQueue: ObservableObject {
             "--no-warnings",
             "--no-mtime",
             "--no-write-info-json",
-            "--no-write-thumbnail",
             "--no-write-description",
             "--no-write-playlist-metafiles",
             "--progress",
@@ -494,6 +493,7 @@ final class ConversionQueue: ObservableObject {
             "--print-to-file", "after_move:filepath", pathFile.path,
             "-o", staging.appendingPathComponent("%(title)s.%(ext)s").path,
         ]
+        args += Downloader.metadataArguments
         args += settings.downloadPlaylists ? ["--yes-playlist"] : ["--no-playlist"]
         if let browser = settings.cookiesBrowser.argument {
             args += ["--cookies-from-browser", browser]
@@ -503,7 +503,12 @@ final class ConversionQueue: ObservableObject {
         }
         if job.format.kind == .audio {
             args += ["-f", "ba/b"]
+            // Saved beside the audio as name.jpg, then embedded as cover art.
+            args += job.format.canEmbedCover
+                ? ["--write-thumbnail", "--convert-thumbnails", "jpg"]
+                : ["--no-write-thumbnail"]
         } else {
+            args.append("--no-write-thumbnail")
             var selector = "bv*+ba/b"
             if job.options.resolution != .original {
                 let height = job.options.resolution.rawValue
@@ -560,13 +565,15 @@ final class ConversionQueue: ObservableObject {
             return
         }
 
+        let cover = format.canEmbedCover ? Self.thumbnail(for: input, staging: staging) : nil
         job.detail = "Converting…"
         Task.detached(priority: .userInitiated) { [self] in
             let duration = ffmpeg.duration(of: input)
             var result = await Self.runFFmpeg(job: job, input: input, output: output,
                                               format: format, options: options,
                                               ffmpeg: ffmpeg, environment: environment,
-                                              duration: duration, started: started, queue: self)
+                                              duration: duration, started: started, queue: self,
+                                              cover: cover)
             if !result.cancelled, result.launchError == nil, result.status != 0,
                options.remux, format.canRemux {
                 await MainActor.run {
@@ -577,7 +584,19 @@ final class ConversionQueue: ObservableObject {
                                               format: format, options: options,
                                               ffmpeg: ffmpeg, environment: environment,
                                               duration: duration, started: started, queue: self,
+                                              remux: false, cover: cover)
+            }
+            // Cover art is a bonus: an image ffmpeg can't use mustn't cost the audio.
+            if !result.cancelled, result.launchError == nil, result.status != 0, cover != nil {
+                try? FileManager.default.removeItem(at: output)
+                result = await Self.runFFmpeg(job: job, input: input, output: output,
+                                              format: format, options: options,
+                                              ffmpeg: ffmpeg, environment: environment,
+                                              duration: duration, started: started, queue: self,
                                               remux: false)
+                if result.status == 0 {
+                    await MainActor.run { job.note = "Couldn't add the cover art." }
+                }
             }
 
             let finalResult = result
@@ -690,10 +709,12 @@ final class ConversionQueue: ObservableObject {
                                               ffmpeg: FFmpeg, environment: [String: String],
                                               duration: Double?, started: Date,
                                               queue: ConversionQueue,
-                                              remux: Bool? = nil) async -> FFmpegResult {
+                                              remux: Bool? = nil,
+                                              cover: URL? = nil) async -> FFmpegResult {
         var runOptions = options
         if let remux { runOptions.remux = remux }
-        let args = format.arguments(input: input.path, output: output.path, options: runOptions)
+        let args = format.arguments(input: input.path, output: output.path, options: runOptions,
+                                    cover: cover?.path)
 
         let process = Process()
         process.executableURL = ffmpeg.ffmpeg
@@ -880,6 +901,27 @@ final class ConversionQueue: ObservableObject {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// A .jpg named like another file in the folder is that file's thumbnail.
+    nonisolated private static func isThumbnail(_ url: URL, among names: [String]) -> Bool {
+        guard url.pathExtension.lowercased() == "jpg" else { return false }
+        let stem = url.deletingPathExtension().lastPathComponent
+        return names.contains {
+            $0 != url.lastPathComponent && ($0 as NSString).deletingPathExtension == stem
+        }
+    }
+
+    /// The thumbnail yt-dlp saved beside a downloaded file (same name, .jpg).
+    /// Only downloads have one, so files outside the staging folder never do.
+    nonisolated private static func thumbnail(for input: URL, staging: URL?) -> URL? {
+        guard let staging,
+              input.standardizedFileURL.path.hasPrefix(staging.standardizedFileURL.path + "/")
+        else { return nil }
+        let image = input.deletingPathExtension().appendingPathExtension("jpg")
+        guard image.standardizedFileURL != input.standardizedFileURL,
+              FileManager.default.fileExists(atPath: image.path) else { return nil }
+        return image
+    }
+
     /// The paths yt-dlp wrote after moving files, or the media files left in
     /// the staging folder when the path file is missing.
     nonisolated private static func downloadedFiles(staging: URL, pathFile: URL) -> [URL] {
@@ -907,7 +949,7 @@ final class ConversionQueue: ObservableObject {
         if result.isEmpty, let names = try? fm.contentsOfDirectory(atPath: staging.path) {
             for name in names {
                 let url = staging.appendingPathComponent(name)
-                guard MediaFiles.isMedia(url) else { continue }
+                guard MediaFiles.isMedia(url), !isThumbnail(url, among: names) else { continue }
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
                 append(url)

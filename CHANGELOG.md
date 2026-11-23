@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Audio downloaded from YouTube and other yt-dlp sites is tagged, so Apple Music shows a proper title and artist.
+  The title and artist come from YouTube's track and artist when it has them, otherwise from an "Artist - Title"
+  video title, otherwise from the channel name (without "VEVO" or " - Topic"). Labels such as "(Official Video)"
+  or "[Lyrics]" are dropped from the title. The year is set only from a release date, never the upload date, and
+  the video description is left out; the video link goes in the comment.
+- The video thumbnail is embedded as square, center-cropped cover art in MP3, M4A (AAC and ALAC), AIFF and FLAC
+  downloads. If the image can't be used, the audio is converted without it and the job says so.
+- MP3 files are written with ID3v2.3 tags, and AIFF files now carry tags at all.
+
 ## [1.3.2] - 2026-11-05
 
 ### Fixed

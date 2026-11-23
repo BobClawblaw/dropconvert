@@ -59,6 +59,8 @@ The `.sha256` asset on the release page uses the DMG's file name, so `-c` works 
 - Use cookies from Safari, Chrome, Firefox, Edge, Brave, or Chromium for age-restricted, members-only, and
   "confirm you're not a bot" videos.
 - Download full playlists, optionally embed English subtitles, and update yt-dlp from the gear menu.
+- Downloaded audio is tagged for Apple Music and other players: title, artist, release year when YouTube gives one,
+  and the video thumbnail as square cover art (MP3, M4A, AIFF, FLAC).
 - Pause the queue, change a job's format before it runs, reorder or remove jobs, and retry failures.
 - Unfinished jobs are saved and restored after a quit or crash.
 - Cancel stops the whole process tree, including yt-dlp's ffmpeg merge child.

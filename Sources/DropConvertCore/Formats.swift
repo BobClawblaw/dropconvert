@@ -92,22 +92,44 @@ public struct OutputFormat: Identifiable, Hashable, @unchecked Sendable {
             || hardwareEncoder.map(encoders.contains) == true
     }
 
+    /// Whether the container can hold cover art that ffmpeg writes and players read.
+    public var canEmbedCover: Bool {
+        engine == .ffmpeg && kind == .audio && ["mp3", "m4a", "flac", "aiff"].contains(ext)
+    }
+
     /// Full ffmpeg argument list for one file. ImageIO formats ignore this.
-    public func arguments(input: String, output: String, options o: EncodeOptions) -> [String] {
+    /// `cover` is an image embedded as square cover art when the format can hold it.
+    public func arguments(input: String, output: String, options o: EncodeOptions,
+                          cover: String? = nil) -> [String] {
         guard engine == .ffmpeg else { return [] }
+        let cover = canEmbedCover ? cover : nil
         var args = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error",
                     "-progress", "pipe:1", "-nostats", "-i", input]
+        if let cover { args += ["-i", cover] }
+        let audioMap = cover == nil ? ["-map", "0:a:0", "-vn"] : ["-map", "0:a:0"]
         if o.remux && canRemux {
-            args += kind == .audio ? ["-map", "0:a:0", "-vn", "-c", "copy"]
+            args += kind == .audio ? audioMap + ["-c:a", "copy"]
                                    : ["-map", "0:v?", "-map", "0:a?", "-c", "copy"]
         } else {
-            args += kind == .audio ? ["-map", "0:a:0", "-vn"] : ["-map", "0:v:0", "-map", "0:a:0?"]
+            args += kind == .audio ? audioMap : ["-map", "0:v:0", "-map", "0:a:0?"]
             args += build(o)
             if kind == .still { args += ["-frames:v", "1"] }
+        }
+        if cover != nil {
+            // Center-cropped to a square, the shape music players show.
+            args += ["-map", "1:v:0", "-c:v", "mjpeg", "-q:v", "2",
+                     "-vf", "crop=min(iw\\,ih):min(iw\\,ih)",
+                     "-disposition:v:0", "attached_pic",
+                     "-metadata:s:v", "title=Album cover",
+                     "-metadata:s:v", "comment=Cover (front)"]
         }
         if ext == "mp4" || ext == "mov" || ext == "m4v" || ext == "m4a" {
             args += ["-movflags", "+faststart"]
         }
+        // ID3v2.3 is the tag version every player, Apple Music included, reads.
+        if ext == "mp3" { args += ["-id3v2_version", "3"] }
+        // AIFF carries tags only in an ID3 chunk, which ffmpeg leaves out by default.
+        if ext == "aiff" { args += ["-write_id3v2", "1"] }
         return args + [output]
     }
 

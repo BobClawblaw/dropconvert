@@ -57,6 +57,37 @@ public struct Downloader: Sendable {
                                     : Self.lastMeaningfulLine(output) ?? "yt-dlp -U failed.")
     }
 
+    /// yt-dlp arguments that tag the downloaded file so Apple Music and other
+    /// players show a proper title and artist. Only the embedded tags change; the
+    /// file name still comes from the video title.
+    ///
+    /// Best effort, in order: YouTube's own track and artist (music videos and
+    /// "Topic" channels carry them); otherwise an "Artist - Title" video title;
+    /// otherwise the channel name without a "VEVO" or " - Topic" suffix. Tags
+    /// such as "(Official Video)" or "[Lyrics]" are dropped from the title.
+    /// YouTube's album, track number, genre and the video link are embedded as given.
+    public static let metadataArguments: [String] = [
+        "--embed-metadata",
+        "--parse-metadata", "%(track,title)s:%(meta_title)s",
+        "--parse-metadata", "%(artist,creator,uploader)s:%(meta_artist)s",
+        "--replace-in-metadata", "meta_artist", #"(?i)(\s*-\s*topic|vevo)$"#, "",
+        // The separator makes the pattern match only when YouTube gave no artist.
+        "--parse-metadata",
+        #"%(artist|)s\#u{241F}%(title)s:^\#u{241F}(?P<meta_artist>.+?)\s+[-–—]\s+(?P<meta_title>.+)$"#,
+        // With an artist, drop a repeated "Artist - " from the start of the title.
+        "--parse-metadata",
+        #"%(artist|)s\#u{241F}%(meta_title)s:^(?P<artist>.+)\#u{241F}(?P=artist)\s+[-–—]\s+(?P<meta_title>.+)$"#,
+        // Year from the release date only: an upload date is not when a song came
+        // out, so without one the year is left empty.
+        "--parse-metadata", "%(release_date>%Y-%m-%d,release_year|)s:(?P<meta_date>.*)",
+        // Leave out the video description (links, hashtags), which would fill the
+        // player's description field; the video link stays in the comment.
+        "--parse-metadata", ":(?P<meta_description>)",
+        "--parse-metadata", ":(?P<meta_synopsis>)",
+        "--replace-in-metadata", "meta_title",
+        #"(?i)\s*[\(\[](official|lyrics?|audio|video|visuali[sz]er|hd|hq|4k|mv|m/v)[^\)\]]*[\)\]]"#, "",
+    ]
+
     /// Pulls links out of pasted text. Accepts one per line, separated by
     /// whitespace, commas, or semicolons, and bare `youtu.be/...`-style hosts.
     /// YouTube variants are normalized so duplicates collapse.

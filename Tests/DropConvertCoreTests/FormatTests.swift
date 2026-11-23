@@ -59,3 +59,50 @@ final class FormatTests: XCTestCase {
         XCTAssertFalse(OutputFormat.hw("libx264", "h264_videotoolbox", options(hardware: false)))
     }
 }
+
+extension FormatTests {
+    func testMP3WritesID3v23() throws {
+        let format = try XCTUnwrap(OutputFormat.all.first { $0.id == "mp3" })
+        let args = format.arguments(input: "/tmp/in.webm", output: "/tmp/out.mp3", options: options())
+        let index = try XCTUnwrap(args.firstIndex(of: "-id3v2_version"))
+        XCTAssertEqual(args[index + 1], "3")
+    }
+
+    func testAIFFWritesTags() throws {
+        let format = try XCTUnwrap(OutputFormat.all.first { $0.id == "aiff" })
+        let args = format.arguments(input: "/tmp/in.webm", output: "/tmp/out.aiff", options: options())
+        let index = try XCTUnwrap(args.firstIndex(of: "-write_id3v2"))
+        XCTAssertEqual(args[index + 1], "1")
+    }
+
+    func testCoverArtIsEmbeddedAsSquareAttachedPicture() throws {
+        let format = try XCTUnwrap(OutputFormat.all.first { $0.id == "mp3" })
+        let args = format.arguments(input: "/tmp/in.webm", output: "/tmp/out.mp3",
+                                    options: options(), cover: "/tmp/in.jpg")
+        XCTAssertEqual(args.filter { $0 == "-i" }.count, 2)
+        XCTAssertTrue(args.contains("/tmp/in.jpg"))
+        XCTAssertTrue(args.contains("1:v:0"))
+        XCTAssertTrue(args.contains("attached_pic"))
+        XCTAssertFalse(args.contains("-vn"))
+        XCTAssertEqual(args.last, "/tmp/out.mp3")
+    }
+
+    func testCoverArtRemuxCopiesOnlyAudio() throws {
+        let format = try XCTUnwrap(OutputFormat.all.first { $0.id == "m4a" })
+        let args = format.arguments(input: "/tmp/in.m4a", output: "/tmp/out.m4a",
+                                    options: options(remux: true), cover: "/tmp/in.jpg")
+        XCTAssertTrue(args.contains("-c:a"))
+        XCTAssertFalse(args.contains("-c"))
+        XCTAssertTrue(args.contains("mjpeg"))
+    }
+
+    func testCoverArtSkippedWhereContainerCantHoldIt() throws {
+        for id in ["ogg-opus", "wav", "caf", "mp4-h264"] {
+            let format = try XCTUnwrap(OutputFormat.all.first { $0.id == id })
+            XCTAssertFalse(format.canEmbedCover, id)
+            let args = format.arguments(input: "/tmp/in.webm", output: "/tmp/out",
+                                        options: options(), cover: "/tmp/in.jpg")
+            XCTAssertFalse(args.contains("/tmp/in.jpg"), id)
+        }
+    }
+}
