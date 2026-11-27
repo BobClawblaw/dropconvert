@@ -36,6 +36,8 @@ final class Job: ObservableObject, Identifiable {
     @Published var detail: String?
     @Published var note: String?
     @Published var errorDetails: String?
+    @Published var inputSizeBytes: Int64?
+    @Published var outputSizeBytes: Int64?
     var process: Process?
     var inputFile: URL?
     var staging: URL?
@@ -48,6 +50,14 @@ final class Job: ObservableObject, Identifiable {
         self.format = format
         self.options = options
         self.phase = phase
+    }
+
+    func appendNote(_ message: String) {
+        if let existing = note, !existing.isEmpty {
+            if !existing.contains(message) { note = "\(existing) \(message)" }
+        } else {
+            note = message
+        }
     }
 
     var isRemote: Bool { source.isLink }

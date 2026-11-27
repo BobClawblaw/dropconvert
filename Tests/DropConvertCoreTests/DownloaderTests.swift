@@ -34,6 +34,16 @@ final class DownloaderTests: XCTestCase {
         let links = Downloader.links(in: "www.example.com/video")
         XCTAssertEqual(links.first?.absoluteString, "https://www.example.com/video")
     }
+
+    func testNormalizesYouTubeMusicLinks() {
+        let links = Downloader.links(in: """
+        https://music.youtube.com/watch?v=abc123&list=RDAMVMabc123
+        https://youtu.be/abc123?list=RDAMVMabc123
+        """)
+        XCTAssertEqual(links.map(\.absoluteString), [
+            "https://www.youtube.com/watch?v=abc123&list=RDAMVMabc123",
+        ])
+    }
 }
 
 extension DownloaderTests {
@@ -42,6 +52,8 @@ extension DownloaderTests {
         XCTAssertTrue(brew.isHomebrew)
         let system = Downloader(ytDlp: URL(fileURLWithPath: "/usr/bin/yt-dlp"))
         XCTAssertFalse(system.isHomebrew)
+        let standalone = Downloader(ytDlp: URL(fileURLWithPath: "/usr/local/bin/standalone-yt-dlp-nonexistent"))
+        XCTAssertFalse(standalone.isHomebrew)
     }
 }
 

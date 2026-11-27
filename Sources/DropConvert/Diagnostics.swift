@@ -14,9 +14,13 @@ enum Diagnostics {
         lines.append("")
         lines.append("Settings: format=\(settings.formatID) quality=\(settings.quality.rawValue) "
                      + "size=\(settings.resolution.label) hardware=\(settings.hardware) "
-                     + "remux=\(settings.remux) cookies=\(settings.cookiesBrowser.rawValue) "
+                     + "remux=\(settings.remux) concurrency=\(settings.maxConcurrentJobs) "
+                     + "notify=\(settings.notifyWhenDone) cookies=\(settings.cookiesBrowser.rawValue) "
                      + "playlists=\(settings.downloadPlaylists) subtitles=\(settings.embedSubtitles)")
-        lines.append("Output folder: \(settings.outputFolder?.path ?? "beside the source / Downloads")")
+        let folderStatus = settings.outputFolder.map {
+            settings.outputFolderIsUnavailable ? "\($0.path) (unavailable)" : $0.path
+        } ?? "beside the source / Downloads"
+        lines.append("Output folder: \(folderStatus)")
         lines.append("")
         lines.append("Jobs:")
         if queue.jobs.isEmpty {

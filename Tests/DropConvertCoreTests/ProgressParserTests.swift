@@ -40,4 +40,16 @@ final class ProgressParserTests: XCTestCase {
         let update = parser.feed(Data("\n".utf8))
         XCTAssertEqual(update?.seconds ?? 0, 1.0, accuracy: 0.001)
     }
+
+    func testPlaylistItemTracking() {
+        let parser = DownloadProgressParser()
+        let first = parser.feed(Data("[download] Downloading item 2 of 15\n".utf8))
+        XCTAssertEqual(first?.itemIndex, 2)
+        XCTAssertEqual(first?.itemCount, 15)
+        let second = parser.feed(Data("[download]  40.0% of 20.00MiB at 5.00MiB/s ETA 00:03\n".utf8))
+        XCTAssertEqual(second?.itemIndex, 2)
+        XCTAssertEqual(second?.itemCount, 15)
+        XCTAssertEqual(second?.fraction ?? 0, 0.4, accuracy: 0.001)
+        XCTAssertEqual(second?.speed, "5.00MiB/s")
+    }
 }

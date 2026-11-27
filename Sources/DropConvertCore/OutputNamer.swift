@@ -43,15 +43,19 @@ public enum OutputNamer {
                                      avoiding claimed: Set<String>, excluding input: URL?,
                                      fileManager: FileManager) -> URL {
         let clean = safeBase(base)
-        let inputPath = input?.standardizedFileURL.path
+        // Compare case-insensitively so macOS's default case-insensitive APFS
+        // doesn't let two queued jobs (e.g. Clip.mov and clip.avi) collide.
+        let inputLower = input?.standardizedFileURL.path.lowercased()
+        let claimedLower = Set(claimed.map { $0.lowercased() })
         var counter = 0
         while counter < 10_000 {
             let name = counter == 0 ? clean : "\(clean) \(counter + 1)"
             let candidate = folder.appendingPathComponent(name).appendingPathExtension(ext)
             let path = candidate.standardizedFileURL.path
-            if path != inputPath,
+            let lower = path.lowercased()
+            if lower != inputLower,
                !fileManager.fileExists(atPath: path),
-               !claimed.contains(path) {
+               !claimedLower.contains(lower) {
                 return candidate
             }
             counter += 1

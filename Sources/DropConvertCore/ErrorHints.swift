@@ -34,8 +34,12 @@ public enum ErrorHints {
         if has("requested format is not available") || has("requested format not available") {
             return "That quality isn't offered for this video. Pick another size and try again."
         }
-        if has("ffmpeg not found") || has("ffmpeg-location") {
+        if has("ffmpeg not found") || has("ffmpeg is not installed")
+            || (has("ffmpeg-location") && (has("not found") || has("does not exist") || has("error"))) {
             return "ffmpeg wasn't found. Install it with Homebrew: brew install ffmpeg."
+        }
+        if has("videotoolbox") && (has("error") || has("failed") || has("cannot")) {
+            return "Hardware encoding failed on this file. Turn off “Use hardware encoder” in the gear menu and try again."
         }
         if has("no space left on device") {
             return "The disk is full. Free some space and try again."

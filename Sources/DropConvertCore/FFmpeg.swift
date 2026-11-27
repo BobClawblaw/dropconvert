@@ -1,5 +1,20 @@
 import Foundation
 
+/// Summary of a media file's streams and duration from a single ffprobe call.
+public struct MediaProbe: Sendable {
+    public let duration: Double?
+    public let hasVideo: Bool
+    public let hasAudio: Bool
+    public let hasSubtitles: Bool
+
+    public init(duration: Double?, hasVideo: Bool, hasAudio: Bool, hasSubtitles: Bool) {
+        self.duration = duration
+        self.hasVideo = hasVideo
+        self.hasAudio = hasAudio
+        self.hasSubtitles = hasSubtitles
+    }
+}
+
 /// Finds ffmpeg/ffprobe and lists the encoders the build offers.
 public struct FFmpeg: Sendable {
     public let ffmpeg: URL
@@ -27,6 +42,40 @@ public struct FFmpeg: Sendable {
         let ffprobe = ToolLocator.locate(named: "ffprobe")
         let version = ToolLocator.version(of: ffmpeg, arguments: ["-version"])
         return FFmpeg(ffmpeg: ffmpeg, ffprobe: ffprobe, encoders: Set(encoders), version: version)
+    }
+
+    /// Probes duration and stream presence in a single ffprobe invocation.
+    public func probe(of file: URL) -> MediaProbe? {
+        guard let ffprobe,
+              let out = Self.output(ffprobe, [
+                  "-v", "error",
+                  "-show_entries", "format=duration:stream=codec_type",
+                  "-of", "json",
+                  file.path,
+              ]),
+              let data = out.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        let formatDict = json["format"] as? [String: Any]
+        let durationValue: Double? = (formatDict?["duration"] as? String)
+            .flatMap(Double.init)
+            .flatMap { $0 > 0 ? $0 : nil }
+
+        let streams = json["streams"] as? [[String: Any]] ?? []
+        var hasVideo = false
+        var hasAudio = false
+        var hasSubtitles = false
+        for stream in streams {
+            switch stream["codec_type"] as? String {
+            case "video": hasVideo = true
+            case "audio": hasAudio = true
+            case "subtitle": hasSubtitles = true
+            default: break
+            }
+        }
+        return MediaProbe(duration: durationValue, hasVideo: hasVideo,
+                          hasAudio: hasAudio, hasSubtitles: hasSubtitles)
     }
 
     /// Duration in seconds, or nil when the container doesn't say.

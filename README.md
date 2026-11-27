@@ -20,6 +20,8 @@ A small macOS app: drop a video, image, or folder on its menu-bar icon (or into 
 the format you picked, using ffmpeg. You can also paste a list of video links — YouTube and other yt-dlp sites — to
 download and convert them. Results land beside the original, in a folder you choose, or in Downloads for links.
 
+**Project site:** [bobclawblaw.github.io/dropconvert](https://bobclawblaw.github.io/dropconvert/)
+
 ![DropConvert window](docs/dropconvert-window.png)
 
 The app also has a Dock icon and a regular window with the same controls. If macOS hides the menu-bar item because
@@ -46,7 +48,7 @@ prompt, but if macOS still blocks one, use the same Open Anyway flow.
 Verify a download with:
 
 ```sh
-shasum -a 256 -c DropConvert-1.4.0.dmg.sha256
+shasum -a 256 -c DropConvert-1.5.0.dmg.sha256
 ```
 
 The `.sha256` asset on the release page uses the DMG's file name, so `-c` works after downloading both files into the same folder.
@@ -54,18 +56,27 @@ The `.sha256` asset on the release page uses the DMG's file name, so `-c` works 
 ## Features
 
 - Convert local videos, still images, animated GIFs, and audio between the formats listed below.
-- Drop folders to convert every supported file inside them, recursively.
+- Drop folders to convert every supported file inside them, recursively (scanned off the main thread).
 - Paste one or many links to download with yt-dlp, then convert to any selected format.
 - Use cookies from Safari, Chrome, Firefox, Edge, Brave, or Chromium for age-restricted, members-only, and
   "confirm you're not a bot" videos.
-- Download full playlists, optionally embed English subtitles, and update yt-dlp from the gear menu.
+- Download full playlists with live item progress (`item 2/15`), optionally embed English subtitles (preserved into
+  MP4/MOV/M4V as `mov_text` or stream-copied into MKV), and update yt-dlp from the gear menu.
 - Downloaded audio is tagged for Apple Music and other players: title, artist, release year when YouTube gives one,
   and the video thumbnail as square cover art (MP3, M4A, AIFF, FLAC).
-- Pause the queue, change a job's format before it runs, reorder or remove jobs, and retry failures.
-- Unfinished jobs are saved and restored after a quit or crash.
+- Native macOS ImageIO conversion for HEIC and AVIF preserves EXIF orientation, camera metadata, and Display P3 color,
+  with automatic ffmpeg decoding fallback for exotic image formats.
+- Pause the queue, run 1, 2, or 4 concurrent jobs, change a job's format before it runs, drag-to-reorder or remove jobs,
+  retry individual or all failed jobs, and switch quickly using recent format chips.
+- Completed jobs show before/after file size savings and can be dragged straight out of the queue into Finder, Mail,
+  Slack, or other apps.
+- Unfinished jobs — including downloaded playlist items — are saved and restored to resume after a quit or crash.
+- Prevents idle Mac sleep while jobs are running and sends optional macOS notifications when a batch finishes.
 - Cancel stops the whole process tree, including yt-dlp's ffmpeg merge child.
-- If "Copy streams" fails because the codecs don't fit the container, the app automatically retries with a re-encode.
-- Preflight checks catch missing audio/video streams, an unwritable output folder, and low disk space.
+- Smart automatic fallbacks: retries with a re-encode if "Copy streams" fails, falls back to software encoding if
+  VideoToolbox rejects an input, and drops incompatible subtitles or cover art rather than failing the whole conversion.
+- Off-main-thread preflight checks catch missing audio/video streams, an unwritable output folder (with a clear warning
+  when a custom folder is unavailable), and low disk space.
 - **gear menu → Copy diagnostics** collects tool paths, versions, settings, and recent errors for bug reports.
 
 ## Formats
@@ -84,8 +95,8 @@ hidden unless you install an ffmpeg build that includes it.
 ## Links
 
 Paste links into the "Paste video links" box in the app — one per line, or separated by spaces, commas, or semicolons —
-then press Download. YouTube variants (`youtu.be`, `/shorts/`, `/embed/`, `/live/`) are normalized and duplicates are
-collapsed.
+then press Download. YouTube variants (`youtu.be`, `music.youtube.com`, `/shorts/`, `/embed/`, `/live/`) are normalized
+and duplicates are collapsed.
 
 - **Cookies:** gear menu → Cookies for sign-in. Safari may ask for Full Disk Access the first time.
 - **Playlists:** gear menu → Download full playlists. Each item is downloaded and queued as its own conversion.
@@ -100,20 +111,22 @@ numbered when a file with that name already exists. Titles longer than the files
 - **Quality:** Low / Medium / High, mapped to each encoder's own scale (CRF for x264/x265/VP9/AV1, `-q:v` for
   VideoToolbox and the MPEG-family encoders, profile for ProRes, bitrate for audio, compression quality for AVIF/HEIC).
   Lossless formats (PNG, TIFF, BMP, QOI, WAV, AIFF, CAF, FLAC, ALAC) have no quality setting.
-- **Size:** Original, 2160p, 1080p, 720p or 480p — the longest side, which is never upscaled. For video, odd
-  dimensions are trimmed to even ones so 4:2:0 encoders accept them; still images keep odd sizes (lossless formats)
-  unless a smaller target is chosen.
+- **Size:** Original, 2160p, 1080p, 720p or 480p — caps the short side (`1080p` keeps 1920×1080 landscape and 1080×1920
+  portrait) and never upscales. For video, odd dimensions are trimmed to even ones so 4:2:0 encoders accept them;
+  lossless still images keep exact proportions unless a smaller target is chosen.
 - **Copy streams (no re-encode):** remuxes into the new container. It's fast and lossless, but it fails when the codecs
   don't fit the container (H.264 into WebM, say). DropConvert automatically retries with a re-encode if that happens.
 - **Hardware encoder (gear menu):** uses VideoToolbox for H.264, HEVC and ProRes. It's on by default and much faster;
-  turn it off for libx264/libx265, which give smaller files at the same quality.
-- Gear menu: output folder, show in Finder when done, launch at login, cookies, playlists, subtitles, update yt-dlp,
-  copy diagnostics, About.
+  turn it off for libx264/libx265, which give smaller files at the same quality. If VideoToolbox rejects an unusual
+  stream, DropConvert automatically falls back to software encoding.
+- Gear menu: concurrent jobs (1 / 2 / 4), output folder, show in Finder when done, notify when done, launch at login,
+  cookies, playlists, subtitles, update yt-dlp, copy diagnostics, About.
 
-Jobs run one at a time, in the order they were added. Each one shows download speed/ETA or conversion progress and can
-be paused, cancelled, retried, moved, or have its output format changed. A failed or cancelled job leaves no partial
-file. Existing files are never overwritten: `clip.mp4` becomes `clip 2.mp4`. DropConvert is also registered as an
-"Open With" app for videos and images in Finder, and accepts dropped links.
+Jobs run in the order they were added (1 at a time by default, or up to 2 or 4 concurrently from the gear menu). Each
+one shows download speed/ETA (plus playlist item counts) or conversion progress, can be paused, cancelled, retried,
+dragged to reorder, or have its output format changed, and completed outputs can be dragged directly out of the queue.
+A failed or cancelled job leaves no partial file. Existing files are never overwritten: `clip.mp4` becomes `clip 2.mp4`.
+DropConvert is also registered as an "Open With" app for videos and images in Finder, and accepts dropped links.
 
 ## Requirements
 

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DropConvert — Menu-Bar Media Converter &amp; Downloader for macOS</title>
+  <meta name="description" content="Drop videos, images, audio, or folders on your macOS menu bar — or paste YouTube and yt-dlp links — to convert locally with ffmpeg and ImageIO.">
+  <meta property="og:title" content="DropConvert for macOS">
+  <meta property="og:description" content="Convert local videos, images, and audio or download and convert links straight from your macOS menu bar.">
+  <meta property="og:image" content="dropconvert-window.png">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-inner">
+      <a class="brand" href="#top">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="3"></rect>
+            <path d="M7 4v16M17 4v16M3 9h4M17 9h4M3 15h4M17 15h4"></path>
+          </svg>
+        </span>
+        <span>DropConvert</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#features">Features</a>
+        <a href="#formats">Formats</a>
+        <a href="#install">Install</a>
+        <a class="nav-gh" href="https://github.com/BobClawblaw/dropconvert" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <div class="pill-row">
+            <span class="pill">macOS 14+</span>
+            <span class="pill">Apple Silicon &amp; Intel</span>
+            <span class="pill">Open Source · MIT</span>
+          </div>
+          <h1>Drop media.<br>Paste links.<br><span class="accent">Convert in one step.</span></h1>
+          <p class="lead">
+            A lightweight macOS menu-bar and Dock app powered by <strong>ffmpeg</strong>,
+            <strong>ImageIO</strong>, and <strong>yt-dlp</strong>. Drop files or folders, or paste
+            YouTube and web video links, and let DropConvert handle codecs, tags, cover art, and subtitles.
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="https://github.com/BobClawblaw/dropconvert/releases/latest" target="_blank" rel="noopener">
+              Download Latest DMG
+            </a>
+            <a class="btn btn-secondary" href="#install">Install with Homebrew</a>
+          </div>
+          <div class="brew-snippet" role="region" aria-label="Homebrew quick install">
+            <code>brew trust bobclawblaw/tap &amp;&amp; brew install --cask bobclawblaw/tap/dropconvert</code>
+            <button type="button" class="copy-btn" data-copy="brew trust bobclawblaw/tap && brew install --cask bobclawblaw/tap/dropconvert">Copy</button>
+          </div>
+        </div>
+
+        <div class="hero-visual">
+          <div class="screenshot-frame">
+            <img src="dropconvert-window.png" alt="DropConvert macOS app window showing drop zone, video link box, format options, and queue" width="760" height="1280" loading="eager">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="container">
+        <div class="section-head">
+          <h2>Built for fast, fuss-free media work</h2>
+          <p>Everything lives in a compact menu-bar popover — with a full resizable window whenever you want it.</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="card">
+            <h3>Menu-bar, Dock &amp; Folder Drops</h3>
+            <p>Drop videos, images, audio, or entire folders onto the menu-bar icon or window. Folders expand recursively off the main thread and existing files are never overwritten.</p>
+          </article>
+
+          <article class="card">
+            <h3>YouTube &amp; yt-dlp Links</h3>
+            <p>Paste one or dozens of links (including <code>youtu.be</code>, Shorts, live, and YouTube Music). Supports browser cookies, playlists with live item counts, and one-click yt-dlp updates.</p>
+          </article>
+
+          <article class="card">
+            <h3>Apple Music-Ready Audio Tagging</h3>
+            <p>Downloaded audio automatically embeds clean title, artist, release year, and center-cropped square cover art for MP3 (ID3v2.3), M4A, AIFF, and FLAC.</p>
+          </article>
+
+          <article class="card">
+            <h3>Smart Automatic Fallbacks</h3>
+            <p>Copy streams fails? Re-encodes automatically. VideoToolbox rejects an unusual stream? Falls back to software. Incompatible subtitles or cover art never ruin a conversion.</p>
+          </article>
+
+          <article class="card">
+            <h3>Native HEIC &amp; AVIF via ImageIO</h3>
+            <p>Writes HEIC and AVIF with macOS ImageIO while preserving EXIF orientation, camera metadata, and Display P3 color. Orientation-aware sizing keeps portrait media crisp.</p>
+          </article>
+
+          <article class="card">
+            <h3>Queue Persistence &amp; Drag-Out</h3>
+            <p>Run 1, 2, or 4 jobs concurrently, drag to reorder, keep your Mac awake during encodes, survive quits or crashes, see file size savings, and drag finished files straight into other apps.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="formats" class="section section-alt">
+      <div class="container">
+        <div class="section-head">
+          <h2>Every format your ffmpeg &amp; Mac can encode</h2>
+          <p>DropConvert inspects your installed ffmpeg and macOS ImageIO at launch and only lists encoders available on your machine.</p>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="Format categories">
+          <button class="tab active" role="tab" aria-selected="true" data-tab="video">Video (18)</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="still">Still Image (8)</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="animated">Animated (1)</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="audio">Audio Only (8)</button>
+        </div>
+
+        <div class="format-panels">
+          <div class="format-panel active" data-panel="video">
+            <ul class="format-list">
+              <li><strong>MP4</strong><span>H.264, HEVC (H.265), AV1 · VideoToolbox + faststart + subtitles</span></li>
+              <li><strong>MOV</strong><span>H.264, HEVC (H.265), ProRes 422 (Proxy / Standard / HQ)</span></li>
+              <li><strong>MKV</strong><span>H.264, HEVC (H.265) · native subtitle copy</span></li>
+              <li><strong>M4V</strong><span>H.264 · faststart + mov_text subtitles</span></li>
+              <li><strong>WebM</strong><span>VP9 + Opus, AV1 + Opus</span></li>
+              <li><strong>Classic &amp; Broadcast</strong><span>AVI (MPEG-4), MPG (MPEG-2), MPEG-TS, FLV, 3GP, WMV, OGV (Theora)</span></li>
+            </ul>
+          </div>
+
+          <div class="format-panel" data-panel="still">
+            <ul class="format-list">
+              <li><strong>HEIC &amp; AVIF</strong><span>macOS ImageIO · EXIF orientation, metadata &amp; Display P3 preserved</span></li>
+              <li><strong>JPG &amp; WebP</strong><span>Quality-controlled lossy stills (WebP shown when ffmpeg includes libwebp)</span></li>
+              <li><strong>PNG, TIFF, BMP, QOI</strong><span>Lossless stills with Lanczos downscaling when resized</span></li>
+            </ul>
+          </div>
+
+          <div class="format-panel" data-panel="animated">
+            <ul class="format-list">
+              <li><strong>GIF</strong><span>Two-pass palettegen + sierra2_4a dithering with orientation-aware scaling</span></li>
+            </ul>
+          </div>
+
+          <div class="format-panel" data-panel="audio">
+            <ul class="format-list">
+              <li><strong>MP3</strong><span>libmp3lame VBR · ID3v2.3 tags + square cover art</span></li>
+              <li><strong>M4A</strong><span>AAC or lossless ALAC · faststart + square cover art</span></li>
+              <li><strong>AIFF &amp; FLAC</strong><span>Lossless studio audio · ID3/Vorbis tags + square cover art</span></li>
+              <li><strong>WAV, CAF, OGG Opus</strong><span>Uncompressed PCM &amp; modern low-bitrate Opus</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="install" class="section">
+      <div class="container install-grid">
+        <div>
+          <h2>Install in under a minute</h2>
+          <p class="muted">Requires macOS 14 Sonoma or later, <code>ffmpeg</code>, and optionally <code>yt-dlp</code> for link downloads.</p>
+
+          <div class="step">
+            <span class="step-num">1</span>
+            <div>
+              <h3>Install ffmpeg &amp; yt-dlp</h3>
+              <div class="code-box">
+                <code>brew install ffmpeg yt-dlp</code>
+                <button type="button" class="copy-btn" data-copy="brew install ffmpeg yt-dlp">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step-num">2</span>
+            <div>
+              <h3>Install DropConvert</h3>
+              <div class="code-box">
+                <code>brew trust bobclawblaw/tap &amp;&amp; brew install --cask bobclawblaw/tap/dropconvert</code>
+                <button type="button" class="copy-btn" data-copy="brew trust bobclawblaw/tap && brew install --cask bobclawblaw/tap/dropconvert">Copy</button>
+              </div>
+              <p class="small muted">Or grab the universal DMG and <code>.sha256</code> checksum from <a href="https://github.com/BobClawblaw/dropconvert/releases" target="_blank" rel="noopener">GitHub Releases</a>.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step-num">3</span>
+            <div>
+              <h3>First launch on macOS 15+</h3>
+              <p class="small muted">GitHub builds are ad-hoc signed unless a Developer ID certificate is configured. If Gatekeeper blocks launch, open <strong>System Settings → Privacy &amp; Security</strong> and click <strong>Open Anyway</strong>.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="about-card">
+          <img src="dropconvert-about.png" alt="About DropConvert window showing version and feature pills" width="880" height="860" loading="lazy">
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>DropConvert · MIT License</span>
+      <div class="footer-links">
+        <a href="https://github.com/BobClawblaw/dropconvert" target="_blank" rel="noopener">Source Code</a>
+        <a href="https://github.com/BobClawblaw/dropconvert/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/BobClawblaw/dropconvert/issues" target="_blank" rel="noopener">Issues</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = btn.getAttribute('data-copy');
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          const original = btn.textContent;
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = original; }, 1800);
+        } catch (_) {}
+      });
+    });
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const key = tab.getAttribute('data-tab');
+        document.querySelectorAll('.tab').forEach(t => {
+          const active = t === tab;
+          t.classList.toggle('active', active);
+          t.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('.format-panel').forEach(panel => {
+          panel.classList.toggle('active', panel.getAttribute('data-panel') === key);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

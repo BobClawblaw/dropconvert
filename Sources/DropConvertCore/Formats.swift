@@ -88,8 +88,9 @@ public struct OutputFormat: Identifiable, Hashable, @unchecked Sendable {
 
     public func isAvailable(_ encoders: Set<String>) -> Bool {
         if engine == .imageIO { return NativeImage.supports(ext) }
-        return self.encoders.allSatisfy(encoders.contains)
-            || hardwareEncoder.map(encoders.contains) == true
+        if self.encoders.allSatisfy(encoders.contains) { return true }
+        guard let hw = hardwareEncoder, encoders.contains(hw) else { return false }
+        return self.encoders.dropFirst().allSatisfy(encoders.contains)
     }
 
     /// Whether the container can hold cover art that ffmpeg writes and players read.
@@ -97,22 +98,48 @@ public struct OutputFormat: Identifiable, Hashable, @unchecked Sendable {
         engine == .ffmpeg && kind == .audio && ["mp3", "m4a", "flac", "aiff"].contains(ext)
     }
 
+    /// Subtitle codec to use when preserving embedded subtitles, or nil if the
+    /// container doesn't reliably carry them.
+    public var subtitleCodec: String? {
+        guard engine == .ffmpeg, kind == .video else { return nil }
+        switch ext {
+        case "mp4", "mov", "m4v": return "mov_text"
+        case "mkv": return "copy"
+        default: return nil
+        }
+    }
+
     /// Full ffmpeg argument list for one file. ImageIO formats ignore this.
     /// `cover` is an image embedded as square cover art when the format can hold it.
+    /// `includeSubtitles` preserves embedded subtitle streams when the container supports them.
     public func arguments(input: String, output: String, options o: EncodeOptions,
-                          cover: String? = nil) -> [String] {
+                          cover: String? = nil, includeSubtitles: Bool = true) -> [String] {
         guard engine == .ffmpeg else { return [] }
         let cover = canEmbedCover ? cover : nil
+        let subCodec = includeSubtitles ? subtitleCodec : nil
         var args = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error",
                     "-progress", "pipe:1", "-nostats", "-i", input]
         if let cover { args += ["-i", cover] }
         let audioMap = cover == nil ? ["-map", "0:a:0", "-vn"] : ["-map", "0:a:0"]
         if o.remux && canRemux {
-            args += kind == .audio ? audioMap + ["-c:a", "copy"]
-                                   : ["-map", "0:v?", "-map", "0:a?", "-c", "copy"]
+            if kind == .audio {
+                args += audioMap + ["-c:a", "copy"]
+            } else if let subCodec {
+                args += ["-map", "0:v?", "-map", "0:a?", "-map", "0:s?", "-c", "copy"]
+                if subCodec != "copy" { args += ["-c:s", subCodec] }
+            } else {
+                args += ["-map", "0:v?", "-map", "0:a?", "-c", "copy"]
+            }
         } else {
-            args += kind == .audio ? audioMap : ["-map", "0:v:0", "-map", "0:a:0?"]
+            if kind == .audio {
+                args += audioMap
+            } else if subCodec != nil {
+                args += ["-map", "0:v:0", "-map", "0:a:0?", "-map", "0:s?"]
+            } else {
+                args += ["-map", "0:v:0", "-map", "0:a:0?"]
+            }
             args += build(o)
+            if let subCodec { args += ["-c:s", subCodec] }
             if kind == .still { args += ["-frames:v", "1"] }
         }
         if cover != nil {
@@ -139,13 +166,15 @@ public struct OutputFormat: Identifiable, Hashable, @unchecked Sendable {
 
 // MARK: - Codec building blocks
 
-/// Scale to the chosen height (never up) and keep both sides even, which the
-/// 4:2:0 encoders require.
+/// Scale so the short side is at most the chosen target (never upscaling) and
+/// keep both sides even, which 4:2:0 encoders require. That means 1080p yields
+/// 1920x1080 for landscape and 1080x1920 for portrait.
 private func scaleFilter(_ o: EncodeOptions) -> [String] {
     if o.resolution == .original {
         return ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
     }
-    return ["-vf", "scale=-2:'min(\(o.resolution.rawValue),trunc(ih/2)*2)'"]
+    let target = o.resolution.rawValue
+    return ["-vf", "scale='if(lte(ih,iw),-2,min(\(target),trunc(iw/2)*2))':'if(lte(ih,iw),min(\(target),trunc(ih/2)*2),-2)'"]
 }
 
 private func h264(_ o: EncodeOptions, hw: Bool) -> [String] {
@@ -176,11 +205,12 @@ private func mp3(_ o: EncodeOptions) -> [String] { ["-c:a", "libmp3lame", "-q:a"
 
 // MARK: - Still-image building blocks
 
-/// Scale a still to the chosen height (never up) without even-dimension forcing,
-/// since lossless formats accept odd sizes; no filter for Original (pixel-exact).
+/// Scale a still so the short side is at most the chosen target (never up),
+/// keeping odd sizes for lossless formats; no filter for Original (pixel-exact).
 private func stillScale(_ o: EncodeOptions) -> [String] {
     if o.resolution == .original { return [] }
-    return ["-vf", "scale=-2:'min(\(o.resolution.rawValue),ih)':flags=lanczos"]
+    let target = o.resolution.rawValue
+    return ["-vf", "scale='if(lte(ih,iw),-1,min(\(target),iw))':'if(lte(ih,iw),min(\(target),ih),-1)':flags=lanczos"]
 }
 
 private func png(_ o: EncodeOptions) -> [String] { stillScale(o) + ["-c:v", "png"] }
@@ -276,10 +306,10 @@ public extension OutputFormat {
                      encoders: ["qoi"], hardwareEncoder: nil, hasQuality: false) { qoi($0) },
         OutputFormat(id: "gif", name: "GIF", ext: "gif", kind: .image,
                      encoders: ["gif"], hardwareEncoder: nil) { o in
-            let height = o.resolution == .original ? 480 : min(o.resolution.rawValue, 720)
+            let target = o.resolution == .original ? 480 : min(o.resolution.rawValue, 720)
             let fps = o.quality.pick(20, 15, 10)
             return ["-an", "-vf",
-                    "fps=\(fps),scale=-2:'min(\(height),ih)':flags=lanczos,split[a][b];" +
+                    "fps=\(fps),scale='if(lte(ih,iw),-2,min(\(target),iw))':'if(lte(ih,iw),min(\(target),ih),-2)':flags=lanczos,split[a][b];" +
                     "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a",
                     "-loop", "0"]
         },

@@ -37,6 +37,9 @@ final class Settings: ObservableObject {
     @Published var cookiesBrowser: CookieBrowser { didSet { defaults.set(cookiesBrowser.rawValue, forKey: "cookies") } }
     @Published var downloadPlaylists: Bool { didSet { defaults.set(downloadPlaylists, forKey: "playlists") } }
     @Published var embedSubtitles: Bool { didSet { defaults.set(embedSubtitles, forKey: "subtitles") } }
+    @Published var maxConcurrentJobs: Int { didSet { defaults.set(maxConcurrentJobs, forKey: "maxConcurrentJobs") } }
+    @Published var notifyWhenDone: Bool { didSet { defaults.set(notifyWhenDone, forKey: "notifyWhenDone") } }
+    @Published var recentFormatIDs: [String] { didSet { defaults.set(recentFormatIDs, forKey: "recentFormats") } }
 
     init() {
         formatID = defaults.string(forKey: "format") ?? "mp4-h264"
@@ -51,6 +54,25 @@ final class Settings: ObservableObject {
         cookiesBrowser = CookieBrowser(rawValue: defaults.string(forKey: "cookies") ?? "") ?? .off
         downloadPlaylists = defaults.bool(forKey: "playlists")
         embedSubtitles = defaults.bool(forKey: "subtitles")
+        let storedConcurrency = defaults.integer(forKey: "maxConcurrentJobs")
+        maxConcurrentJobs = [1, 2, 4].contains(storedConcurrency) ? storedConcurrency : 1
+        notifyWhenDone = defaults.object(forKey: "notifyWhenDone") as? Bool ?? true
+        recentFormatIDs = defaults.stringArray(forKey: "recentFormats") ?? []
+    }
+
+    func recordFormatUse(_ id: String) {
+        var updated = recentFormatIDs.filter { $0 != id }
+        updated.insert(id, at: 0)
+        if updated.count > 4 { updated = Array(updated.prefix(4)) }
+        if updated != recentFormatIDs { recentFormatIDs = updated }
+    }
+
+    var outputFolderIsUnavailable: Bool {
+        guard let folder = outputFolder else { return false }
+        var isDir: ObjCBool = false
+        let fm = FileManager.default
+        return !(fm.fileExists(atPath: folder.path, isDirectory: &isDir)
+                 && isDir.boolValue && fm.isWritableFile(atPath: folder.path))
     }
 
     var launchAtLogin: Bool {

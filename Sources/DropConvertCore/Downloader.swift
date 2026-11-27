@@ -22,8 +22,10 @@ public struct Downloader: Sendable {
     }
 
     public var isHomebrew: Bool {
-        ytDlp.path.contains("/Cellar/") || ytDlp.path.contains("/homebrew/")
-            || ytDlp.path.hasPrefix("/usr/local/")
+        let raw = ytDlp.path
+        let resolved = ytDlp.resolvingSymlinksInPath().path
+        return raw.contains("/Cellar/") || raw.contains("/homebrew/")
+            || resolved.contains("/Cellar/") || resolved.contains("/homebrew/")
     }
 
     /// Updates yt-dlp through Homebrew when possible, otherwise with `-U`.
@@ -129,7 +131,7 @@ public struct Downloader: Sendable {
         guard let host = url.host?.lowercased() else { return nil }
         let isShort = host == "youtu.be"
         let isYouTube = isShort || host == "youtube.com" || host == "www.youtube.com"
-            || host == "m.youtube.com"
+            || host == "m.youtube.com" || host == "music.youtube.com"
         guard isYouTube else { return nil }
 
         var id: String?

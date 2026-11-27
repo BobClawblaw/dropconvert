@@ -10,6 +10,17 @@ public struct DownloadProgress: Equatable, Sendable {
     public var fraction: Double?
     public var speed: String?
     public var eta: String?
+    public var itemIndex: Int?
+    public var itemCount: Int?
+
+    public init(fraction: Double? = nil, speed: String? = nil, eta: String? = nil,
+                itemIndex: Int? = nil, itemCount: Int? = nil) {
+        self.fraction = fraction
+        self.speed = speed
+        self.eta = eta
+        self.itemIndex = itemIndex
+        self.itemCount = itemCount
+    }
 }
 
 /// Reads ffmpeg's `-progress` key=value stream.
@@ -49,9 +60,11 @@ public final class FFmpegProgressParser: @unchecked Sendable {
     }
 }
 
-/// Reads yt-dlp's `[download] xx.x% ... at ... ETA ...` lines.
+/// Reads yt-dlp's `[download] xx.x% ... at ... ETA ...` and playlist item lines.
 public final class DownloadProgressParser: @unchecked Sendable {
     private var buffer = ""
+    private var itemIndex: Int?
+    private var itemCount: Int?
     private let lock = NSLock()
 
     public init() {}
@@ -63,10 +76,32 @@ public final class DownloadProgressParser: @unchecked Sendable {
         while let index = buffer.firstIndex(where: { $0 == "\n" || $0 == "\r" }) {
             let line = buffer[..<index]
             buffer.removeSubrange(...index)
-            if let progress = Self.progress(in: line) { latest = progress }
+            if let item = Self.playlistItem(in: line) {
+                itemIndex = item.index
+                itemCount = item.count
+                latest = DownloadProgress(itemIndex: item.index, itemCount: item.count)
+            } else if var progress = Self.progress(in: line) {
+                progress.itemIndex = itemIndex
+                progress.itemCount = itemCount
+                latest = progress
+            }
         }
         if buffer.utf8.count > 8_192 { buffer = String(buffer.suffix(4_096)) }
         return latest
+    }
+
+    private static func playlistItem(in line: Substring) -> (index: Int, count: Int)? {
+        guard line.hasPrefix("[download]") else { return nil }
+        let tokens = line.split(separator: " ").map(String.init)
+        // Matches: [download] Downloading item 2 of 15
+        guard tokens.count >= 6,
+              tokens[1] == "Downloading",
+              tokens[2] == "item",
+              tokens[4] == "of",
+              let current = Int(tokens[3]),
+              let total = Int(tokens[5]),
+              current > 0, total > 0 else { return nil }
+        return (current, total)
     }
 
     private static func progress(in line: Substring) -> DownloadProgress? {

@@ -3,6 +3,7 @@ import Combine
 import DropConvertCore
 import Foundation
 import UniformTypeIdentifiers
+import UserNotifications
 
 private struct FFmpegResult {
     var launchError: String?
@@ -11,7 +12,7 @@ private struct FFmpegResult {
     var cancelled: Bool
 }
 
-/// Runs jobs one at a time, in the order they were added.
+/// Runs jobs in the order they were added, up to `settings.maxConcurrentJobs` at once.
 @MainActor
 final class ConversionQueue: ObservableObject {
     @Published private(set) var jobs: [Job] = []
@@ -23,18 +24,30 @@ final class ConversionQueue: ObservableObject {
     @Published private(set) var downloaderUpdateMessage: String?
     let settings: Settings
 
-    private var current: Job?
+    private var runningJobs: [Job] = []
     private let store = QueueStore()
     private var pendingRecords: [JobRecord] = []
     private var deferredFiles: [URL] = []
     private var deferredLinks: [URL] = []
     private var restored = false
     private var jobObservers: [UUID: AnyCancellable] = [:]
+    private var settingsObserver: AnyCancellable?
+    private var sleepActivity: NSObjectProtocol?
+    private var batchCompletedOutputs: [URL] = []
+    private var batchDoneCount = 0
+    private var batchFailedCount = 0
+    private var notificationPermissionRequested = false
 
     init(settings: Settings) {
         self.settings = settings
         self.pendingRecords = store.load()
-        Self.removeStaleStaging()
+        let protected = Self.referencedStagingNames(in: pendingRecords)
+        Self.removeStaleStaging(keeping: protected)
+        settingsObserver = settings.$maxConcurrentJobs
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.startNext() }
+            }
         Task { await locateTools() }
     }
 
@@ -45,10 +58,20 @@ final class ConversionQueue: ObservableObject {
 
     var activeCount: Int { jobs.filter { !$0.state.isFinished }.count }
 
+    var failedCount: Int {
+        jobs.filter {
+            if case .failed = $0.state { return true }
+            return false
+        }.count
+    }
+
     var statusText: String {
         if isLocating { return "Looking for ffmpeg and yt-dlp…" }
         if isPaused { return "Queue paused" }
-        if let current {
+        if runningJobs.count > 1 {
+            return "Working on \(runningJobs.count) items (\(activeCount) remaining)"
+        }
+        if let current = runningJobs.first {
             if case .running(let fraction) = current.state {
                 return fraction.map { "\(Int($0 * 100))% · \(current.title)" }
                     ?? "Working · \(current.title)"
@@ -93,21 +116,34 @@ final class ConversionQueue: ObservableObject {
             deferredFiles += urls
             return
         }
-        let files = MediaFiles.expand(urls)
-        guard !files.isEmpty, let format = selectedFormat(), let options = makeOptions() else { return }
-        var claimed = claimedOutputs()
-        for url in files {
-            let folder = destinationFolder(for: url)
-            let output = OutputNamer.uniqueOutput(input: url, ext: format.ext, folder: folder,
-                                                  avoiding: claimed)
-            claimed.insert(output.standardizedFileURL.path)
-            let job = Job(source: .file(url), title: url.lastPathComponent, output: output,
-                          format: format, options: options, phase: .converting)
-            jobs.append(job)
-            observe(job)
+        guard let format = selectedFormat(), let options = makeOptions() else { return }
+        settings.recordFormatUse(format.id)
+        let outputUnavailable = settings.outputFolderIsUnavailable
+        let chosenFolderName = settings.outputFolder?.lastPathComponent
+
+        Task {
+            let sized: [(URL, Int64?)] = await Task.detached(priority: .userInitiated) {
+                MediaFiles.expand(urls).map { ($0, Self.fileSize($0)) }
+            }.value
+            guard !sized.isEmpty else { return }
+            var claimed = self.claimedOutputs()
+            for (url, sizeBytes) in sized {
+                let folder = self.destinationFolder(for: url)
+                let output = OutputNamer.uniqueOutput(input: url, ext: format.ext, folder: folder,
+                                                      avoiding: claimed)
+                claimed.insert(output.standardizedFileURL.path)
+                let job = Job(source: .file(url), title: url.lastPathComponent, output: output,
+                              format: format, options: options, phase: .converting)
+                job.inputSizeBytes = sizeBytes
+                if outputUnavailable, let chosenFolderName {
+                    job.appendNote("Output folder “\(chosenFolderName)” is unavailable; saving to \(folder.lastPathComponent).")
+                }
+                self.jobs.append(job)
+                self.observe(job)
+            }
+            self.save()
+            self.startNext()
         }
-        save()
-        startNext()
     }
 
     func addLinks(_ urls: [URL]) {
@@ -116,10 +152,16 @@ final class ConversionQueue: ObservableObject {
             return
         }
         guard let format = selectedFormat(), let options = makeOptions() else { return }
+        settings.recordFormatUse(format.id)
+        let outputUnavailable = settings.outputFolderIsUnavailable
+        let chosenFolderName = settings.outputFolder?.lastPathComponent
         for url in urls {
             let source = MediaSource.link(url)
             let job = Job(source: source, title: source.displayName, output: nil,
                           format: format, options: options, phase: .downloading)
+            if outputUnavailable, let chosenFolderName {
+                job.appendNote("Output folder “\(chosenFolderName)” is unavailable; saving to \(linkFolder.lastPathComponent).")
+            }
             jobs.append(job)
             observe(job)
         }
@@ -173,6 +215,8 @@ final class ConversionQueue: ObservableObject {
                         format: job.format,
                         options: job.options,
                         phase: job.isRemote ? .downloading : .converting)
+        again.inputSizeBytes = job.inputSizeBytes
+        again.staging = job.staging
         unobserve(job)
         jobs[index] = again
         observe(again)
@@ -180,13 +224,24 @@ final class ConversionQueue: ObservableObject {
         startNext()
     }
 
+    func retryAllFailed() {
+        let failed = jobs.filter {
+            if case .failed = $0.state { return true }
+            return false
+        }
+        for job in failed { retry(job) }
+    }
+
     func remove(_ job: Job) {
         if case .running = job.state { cancel(job) }
         jobs.removeAll { $0 === job }
+        runningJobs.removeAll { $0 === job }
         unobserve(job)
+        cleanupStaging(job)
         save()
         startNext()
         updateBadge()
+        updateSleepAssertion()
     }
 
     func move(_ job: Job, by offset: Int) {
@@ -197,10 +252,20 @@ final class ConversionQueue: ObservableObject {
         save()
     }
 
+    func move(fromID: UUID, toID: UUID) {
+        guard fromID != toID,
+              let fromIndex = jobs.firstIndex(where: { $0.id == fromID }),
+              let toIndex = jobs.firstIndex(where: { $0.id == toID }) else { return }
+        let job = jobs.remove(at: fromIndex)
+        jobs.insert(job, at: toIndex)
+        save()
+    }
+
     func changeFormat(_ job: Job, id: String) {
         guard let format = availableFormats.first(where: { $0.id == id }),
               let ffmpeg else { return }
         if case .running = job.state { return }
+        settings.recordFormatUse(format.id)
         job.format = format
         job.options = EncodeOptions(quality: settings.quality, resolution: settings.resolution,
                                     hardware: settings.hardware, remux: settings.remux,
@@ -219,6 +284,7 @@ final class ConversionQueue: ObservableObject {
             job.state = .queued
             job.errorDetails = nil
             job.note = nil
+            job.outputSizeBytes = nil
         }
         save()
         startNext()
@@ -228,20 +294,42 @@ final class ConversionQueue: ObservableObject {
         isPaused = paused
         if !paused { startNext() }
         updateBadge()
+        updateSleepAssertion()
     }
 
     func shutdown() {
+        // Persist unfinished jobs as "queued" BEFORE cancelling live processes,
+        // so normal quit restores and resumes them on the next launch.
+        save()
+
+        // Keep staging folders that belong to queued/running playlist children
+        // whose source files live in staging, so they can still convert on relaunch.
+        let protectedStaging = Set(
+            jobs.compactMap { job -> URL? in
+                guard !job.state.isFinished, case .file(let url) = job.source else { return nil }
+                guard let staging = job.staging,
+                      url.standardizedFileURL.path.hasPrefix(staging.standardizedFileURL.path + "/")
+                else { return nil }
+                return staging.standardizedFileURL
+            }
+        )
+
         for job in jobs {
             if case .running = job.state {
                 job.state = .cancelled
-                if let process = job.process { ProcessTree.terminate(process) }
+                if let process = job.process { ProcessTree.terminate(process, wait: true) }
             } else if job.state == .queued {
                 job.state = .cancelled
             }
         }
-        current = nil
-        for job in jobs { cleanupStaging(job) }
-        save()
+        runningJobs.removeAll()
+        for job in jobs {
+            if let staging = job.staging?.standardizedFileURL, protectedStaging.contains(staging) {
+                continue
+            }
+            cleanupStaging(job)
+        }
+        endSleepAssertion()
         updateBadge()
     }
 
@@ -304,37 +392,51 @@ final class ConversionQueue: ObservableObject {
     // MARK: - Running jobs
 
     private func startNext() {
-        guard !isPaused, current == nil, let ffmpeg,
-              let job = jobs.first(where: { $0.state == .queued }) else {
+        guard !isPaused, let ffmpeg else {
             updateBadge()
+            updateSleepAssertion()
             return
         }
-        current = job
-        job.state = .running(nil)
-        job.detail = nil
-        job.errorDetails = nil
-        job.elapsed = 0
-        let started = Date()
+        let limit = max(1, settings.maxConcurrentJobs)
+        while runningJobs.count < limit,
+              let job = jobs.first(where: { $0.state == .queued }) {
+            if runningJobs.isEmpty {
+                batchCompletedOutputs = []
+                batchDoneCount = 0
+                batchFailedCount = 0
+                requestNotificationPermissionIfNeeded()
+            }
+            runningJobs.append(job)
+            job.state = .running(nil)
+            job.detail = nil
+            job.errorDetails = nil
+            job.outputSizeBytes = nil
+            job.elapsed = 0
+            let started = Date()
 
-        switch job.source {
-        case .file(let input):
-            guard FileManager.default.fileExists(atPath: input.path) else {
-                job.state = .failed("The source file is missing.")
-                finished(job)
-                return
+            switch job.source {
+            case .file(let input):
+                guard FileManager.default.fileExists(atPath: input.path) else {
+                    job.state = .failed("The source file is missing.")
+                    finished(job)
+                    continue
+                }
+                if job.inputSizeBytes == nil { job.inputSizeBytes = Self.fileSize(input) }
+                job.phase = .converting
+                job.inputFile = input
+                runConversion(job, input: input, ffmpeg: ffmpeg, started: started)
+            case .link(let link):
+                job.phase = .downloading
+                guard downloader != nil else {
+                    job.state = .failed("yt-dlp not found. Install it with Homebrew: brew install yt-dlp")
+                    finished(job)
+                    continue
+                }
+                runDownload(job, link: link, ffmpeg: ffmpeg, started: started)
             }
-            job.phase = .converting
-            job.inputFile = input
-            runConversion(job, input: input, ffmpeg: ffmpeg, started: started)
-        case .link(let link):
-            job.phase = .downloading
-            guard downloader != nil else {
-                job.state = .failed("yt-dlp not found. Install it with Homebrew: brew install yt-dlp")
-                finished(job)
-                return
-            }
-            runDownload(job, link: link, ffmpeg: ffmpeg, started: started)
         }
+        updateBadge()
+        updateSleepAssertion()
     }
 
     private func runDownload(_ job: Job, link: URL, ffmpeg: FFmpeg, started: Date) {
@@ -403,9 +505,15 @@ final class ConversionQueue: ObservableObject {
 
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
-            let status = process.terminationStatus
+            let trailingErr = err.fileHandleForReading.readDataToEndOfFile()
+            if !trailingErr.isEmpty { errors.append(trailingErr) }
+            try? out.fileHandleForReading.close()
+            try? err.fileHandleForReading.close()
+
+            let status = launchError == nil && !cancelledBefore ? process.terminationStatus : -1
             let stderr = errors.text
             let paths = Self.downloadedFiles(staging: staging, pathFile: pathFile)
+            let downloadedSize = paths.first.flatMap(Self.fileSize)
             let finalLaunchError = launchError
 
             await MainActor.run {
@@ -445,6 +553,7 @@ final class ConversionQueue: ObservableObject {
                 let downloaded = paths[0]
                 job.title = downloaded.deletingPathExtension().lastPathComponent
                 job.inputFile = downloaded
+                job.inputSizeBytes = downloadedSize
                 job.output = OutputNamer.uniqueOutput(
                     base: job.title, folder: self.linkFolder, ext: job.format.ext,
                     avoiding: self.claimedOutputs())
@@ -460,7 +569,7 @@ final class ConversionQueue: ObservableObject {
         job.title = "Playlist · \(paths.count) items"
         job.output = nil
         job.phase = .converting
-        job.note = "Queued \(paths.count) conversions"
+        job.appendNote("Queued \(paths.count) conversions")
         job.state = .done
         var claimed = claimedOutputs()
         for path in paths {
@@ -470,6 +579,7 @@ final class ConversionQueue: ObservableObject {
             claimed.insert(output.standardizedFileURL.path)
             let child = Job(source: .file(path), title: title, output: output,
                             format: job.format, options: job.options, phase: .converting)
+            child.inputSizeBytes = Self.fileSize(path)
             child.staging = staging
             jobs.append(child)
             observe(child)
@@ -540,18 +650,6 @@ final class ConversionQueue: ObservableObject {
             finished(job)
             return
         }
-        if job.format.kind == .audio, ffmpeg.ffprobe != nil,
-           !ffmpeg.hasAudioStream(of: input) {
-            job.state = .failed("This file has no audio track to convert.")
-            finished(job)
-            return
-        }
-        if job.format.kind == .video, ffmpeg.ffprobe != nil,
-           !ffmpeg.hasVideoStream(of: input) {
-            job.state = .failed("This file has no video track to convert.")
-            finished(job)
-            return
-        }
 
         let format = job.format
         let options = job.options
@@ -566,40 +664,119 @@ final class ConversionQueue: ObservableObject {
         }
 
         let cover = format.canEmbedCover ? Self.thumbnail(for: input, staging: staging) : nil
-        job.detail = "Converting…"
+        job.detail = "Inspecting…"
         Task.detached(priority: .userInitiated) { [self] in
-            let duration = ffmpeg.duration(of: input)
+            // Probe duration and stream presence off the main thread in one ffprobe call.
+            let probe = ffmpeg.probe(of: input)
+            if let probe {
+                if format.kind == .audio, !probe.hasAudio {
+                    await MainActor.run {
+                        self.cleanupStaging(job)
+                        job.state = .failed("This file has no audio track to convert.")
+                        self.finished(job)
+                    }
+                    return
+                }
+                if format.kind == .video, !probe.hasVideo {
+                    await MainActor.run {
+                        self.cleanupStaging(job)
+                        job.state = .failed("This file has no video track to convert.")
+                        self.finished(job)
+                    }
+                    return
+                }
+            }
+
+            await MainActor.run {
+                if case .running = job.state { job.detail = "Converting…" }
+            }
+
+            let duration = probe?.duration
+            var currentOptions = options
+            var includeSubtitles = (probe?.hasSubtitles ?? true) && format.subtitleCodec != nil
+            var currentCover = cover
+
             var result = await Self.runFFmpeg(job: job, input: input, output: output,
-                                              format: format, options: options,
+                                              format: format, options: currentOptions,
                                               ffmpeg: ffmpeg, environment: environment,
                                               duration: duration, started: started, queue: self,
-                                              cover: cover)
+                                              cover: currentCover,
+                                              includeSubtitles: includeSubtitles)
+
+            // Fallback 1: remux -> re-encode when codecs don't fit the container.
             if !result.cancelled, result.launchError == nil, result.status != 0,
-               options.remux, format.canRemux {
+               currentOptions.remux, format.canRemux {
+                currentOptions.remux = false
                 await MainActor.run {
-                    job.note = "Streams didn't fit the container; re-encoded instead."
+                    job.appendNote("Streams didn't fit the container; re-encoded instead.")
                 }
                 try? FileManager.default.removeItem(at: output)
                 result = await Self.runFFmpeg(job: job, input: input, output: output,
-                                              format: format, options: options,
+                                              format: format, options: currentOptions,
                                               ffmpeg: ffmpeg, environment: environment,
                                               duration: duration, started: started, queue: self,
-                                              remux: false, cover: cover)
+                                              cover: currentCover,
+                                              includeSubtitles: includeSubtitles)
             }
-            // Cover art is a bonus: an image ffmpeg can't use mustn't cost the audio.
-            if !result.cancelled, result.launchError == nil, result.status != 0, cover != nil {
+
+            // Fallback 2: VideoToolbox hardware encoder -> software encoder.
+            if !result.cancelled, result.launchError == nil, result.status != 0,
+               !currentOptions.remux,
+               let hw = format.hardwareEncoder,
+               let sw = format.encoders.first,
+               OutputFormat.hw(sw, hw, currentOptions),
+               format.encoders.allSatisfy(ffmpeg.encoders.contains) {
+                currentOptions.hardware = false
                 try? FileManager.default.removeItem(at: output)
                 result = await Self.runFFmpeg(job: job, input: input, output: output,
-                                              format: format, options: options,
+                                              format: format, options: currentOptions,
                                               ffmpeg: ffmpeg, environment: environment,
                                               duration: duration, started: started, queue: self,
-                                              remux: false)
+                                              cover: currentCover,
+                                              includeSubtitles: includeSubtitles)
                 if result.status == 0 {
-                    await MainActor.run { job.note = "Couldn't add the cover art." }
+                    await MainActor.run {
+                        job.appendNote("Hardware encoder failed; used software encoder instead.")
+                    }
+                }
+            }
+
+            // Fallback 3: drop incompatible subtitle tracks rather than failing the video.
+            if !result.cancelled, result.launchError == nil, result.status != 0,
+               includeSubtitles {
+                includeSubtitles = false
+                try? FileManager.default.removeItem(at: output)
+                result = await Self.runFFmpeg(job: job, input: input, output: output,
+                                              format: format, options: currentOptions,
+                                              ffmpeg: ffmpeg, environment: environment,
+                                              duration: duration, started: started, queue: self,
+                                              cover: currentCover,
+                                              includeSubtitles: false)
+                if result.status == 0 {
+                    await MainActor.run {
+                        job.appendNote("Couldn't embed subtitles; converted without them.")
+                    }
+                }
+            }
+
+            // Fallback 4: cover art is a bonus — an unreadable thumbnail mustn't cost the audio.
+            if !result.cancelled, result.launchError == nil, result.status != 0,
+               currentCover != nil {
+                currentCover = nil
+                try? FileManager.default.removeItem(at: output)
+                result = await Self.runFFmpeg(job: job, input: input, output: output,
+                                              format: format, options: currentOptions,
+                                              ffmpeg: ffmpeg, environment: environment,
+                                              duration: duration, started: started, queue: self,
+                                              cover: nil,
+                                              includeSubtitles: includeSubtitles)
+                if result.status == 0 {
+                    await MainActor.run { job.appendNote("Couldn't add the cover art.") }
                 }
             }
 
             let finalResult = result
+            let outputSize = finalResult.status == 0 ? Self.fileSize(output) : nil
             await MainActor.run {
                 let cancelled = job.state == .cancelled
                 job.process = nil
@@ -619,6 +796,7 @@ final class ConversionQueue: ObservableObject {
                 }
                 if finalResult.status == 0 {
                     self.cleanupStaging(job)
+                    job.outputSizeBytes = outputSize
                     job.state = .done
                     job.detail = nil
                     self.finished(job)
@@ -654,20 +832,33 @@ final class ConversionQueue: ObservableObject {
 
         Task.detached(priority: .userInitiated) { [self] in
             var failure: String?
-            if Self.isImage(input) {
+            var needsFrameExtraction = !Self.isImage(input)
+
+            if !needsFrameExtraction {
                 do {
                     try NativeImage.convert(input: input, output: output, format: format,
                                             resolution: options.resolution,
                                             quality: options.quality)
+                } catch NativeImageError.unreadable {
+                    // Exotic formats like QOI/WebP that ImageIO can't decode can still
+                    // be decoded through ffmpeg to a temporary PNG first.
+                    needsFrameExtraction = true
                 } catch {
                     failure = error.localizedDescription
                 }
-            } else {
+            }
+
+            if needsFrameExtraction, failure == nil {
                 let args = ["-hide_banner", "-nostdin", "-y", "-loglevel", "error",
                             "-i", input.path, "-frames:v", "1", "-f", "image2", frame.path]
-                let extracted = ProcessRunner.run(ffmpeg.ffmpeg, args,
-                                                  environment: environment, timeout: 120)
-                if extracted?.succeeded == true {
+                let extracted = await Self.runTrackedFFmpeg(job: job, executable: ffmpeg.ffmpeg,
+                                                            arguments: args,
+                                                            environment: environment)
+                if extracted.cancelled {
+                    // Handled below on MainActor.
+                } else if let launchError = extracted.launchError {
+                    failure = launchError
+                } else if extracted.status == 0 {
                     do {
                         try NativeImage.convert(input: frame, output: output, format: format,
                                                 resolution: options.resolution,
@@ -676,13 +867,16 @@ final class ConversionQueue: ObservableObject {
                         failure = error.localizedDescription
                     }
                 } else {
-                    let text = extracted?.stderr ?? ""
-                    failure = ErrorHints.message(for: text) ?? "Couldn't extract a frame from the video."
+                    failure = ErrorHints.message(for: extracted.stderr)
+                        ?? Self.lastMeaningfulLine(extracted.stderr)
+                        ?? "Couldn't extract a frame from the video."
                 }
             }
 
             let finalFailure = failure
+            let outputSize = finalFailure == nil ? Self.fileSize(output) : nil
             await MainActor.run {
+                job.process = nil
                 job.elapsed = Date().timeIntervalSince(started)
                 if job.state == .cancelled {
                     try? FileManager.default.removeItem(at: output)
@@ -695,6 +889,7 @@ final class ConversionQueue: ObservableObject {
                     job.state = .failed(finalFailure)
                     job.errorDetails = finalFailure
                 } else {
+                    job.outputSizeBytes = outputSize
                     job.state = .done
                     job.detail = nil
                 }
@@ -704,17 +899,62 @@ final class ConversionQueue: ObservableObject {
         }
     }
 
+    nonisolated private static func runTrackedFFmpeg(job: Job, executable: URL,
+                                                     arguments: [String],
+                                                     environment: [String: String]) async -> FFmpegResult {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = environment
+        let err = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = err
+        let errors = ErrorTail()
+        err.fileHandleForReading.readabilityHandler = { handle in
+            errors.append(handle.availableData)
+        }
+
+        let cancelledBefore = await MainActor.run { job.state == .cancelled }
+        if cancelledBefore {
+            err.fileHandleForReading.readabilityHandler = nil
+            try? err.fileHandleForReading.close()
+            return FFmpegResult(launchError: nil, status: 0, stderr: "", cancelled: true)
+        }
+
+        let launchError: String? = await MainActor.run {
+            do {
+                try process.run()
+                job.process = process
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }
+        if launchError == nil { process.waitUntilExit() }
+
+        err.fileHandleForReading.readabilityHandler = nil
+        let trailing = err.fileHandleForReading.readDataToEndOfFile()
+        if !trailing.isEmpty { errors.append(trailing) }
+        try? err.fileHandleForReading.close()
+
+        let status = launchError == nil ? process.terminationStatus : -1
+        let cancelled = await MainActor.run {
+            job.process = nil
+            return job.state == .cancelled
+        }
+        return FFmpegResult(launchError: launchError, status: status, stderr: errors.text,
+                            cancelled: cancelled)
+    }
+
     nonisolated private static func runFFmpeg(job: Job, input: URL, output: URL,
                                               format: OutputFormat, options: EncodeOptions,
                                               ffmpeg: FFmpeg, environment: [String: String],
                                               duration: Double?, started: Date,
                                               queue: ConversionQueue,
-                                              remux: Bool? = nil,
-                                              cover: URL? = nil) async -> FFmpegResult {
-        var runOptions = options
-        if let remux { runOptions.remux = remux }
-        let args = format.arguments(input: input.path, output: output.path, options: runOptions,
-                                    cover: cover?.path)
+                                              cover: URL? = nil,
+                                              includeSubtitles: Bool = true) async -> FFmpegResult {
+        let args = format.arguments(input: input.path, output: output.path, options: options,
+                                    cover: cover?.path, includeSubtitles: includeSubtitles)
 
         let process = Process()
         process.executableURL = ffmpeg.ffmpeg
@@ -747,7 +987,13 @@ final class ConversionQueue: ObservableObject {
         }
 
         let cancelledBefore = await MainActor.run { job.state == .cancelled }
-        if cancelledBefore { return FFmpegResult(launchError: nil, status: 0, stderr: "", cancelled: true) }
+        if cancelledBefore {
+            out.fileHandleForReading.readabilityHandler = nil
+            err.fileHandleForReading.readabilityHandler = nil
+            try? out.fileHandleForReading.close()
+            try? err.fileHandleForReading.close()
+            return FFmpegResult(launchError: nil, status: 0, stderr: "", cancelled: true)
+        }
 
         let launchError: String? = await MainActor.run {
             do {
@@ -762,7 +1008,12 @@ final class ConversionQueue: ObservableObject {
 
         out.fileHandleForReading.readabilityHandler = nil
         err.fileHandleForReading.readabilityHandler = nil
-        let status = process.terminationStatus
+        let trailingErr = err.fileHandleForReading.readDataToEndOfFile()
+        if !trailingErr.isEmpty { errors.append(trailingErr) }
+        try? out.fileHandleForReading.close()
+        try? err.fileHandleForReading.close()
+
+        let status = launchError == nil ? process.terminationStatus : -1
         let stderr = errors.text
         let cancelled = await MainActor.run {
             job.process = nil
@@ -773,13 +1024,80 @@ final class ConversionQueue: ObservableObject {
     }
 
     private func finished(_ job: Job) {
-        current = nil
-        if job.state == .done, settings.revealWhenDone, activeCount == 0, let output = job.output {
-            NSWorkspace.shared.activateFileViewerSelecting([output])
+        runningJobs.removeAll { $0 === job }
+        if job.state == .done {
+            batchDoneCount += 1
+            if let output = job.output { batchCompletedOutputs.append(output) }
+        } else if case .failed = job.state {
+            batchFailedCount += 1
         }
+
         save()
-        updateBadge()
         startNext()
+
+        if runningJobs.isEmpty && activeCount == 0 {
+            if settings.revealWhenDone, !batchCompletedOutputs.isEmpty {
+                NSWorkspace.shared.activateFileViewerSelecting(batchCompletedOutputs)
+            }
+            if settings.notifyWhenDone, batchDoneCount + batchFailedCount > 0 {
+                postCompletionNotification(done: batchDoneCount, failed: batchFailedCount,
+                                           lastTitle: job.title)
+            }
+            batchCompletedOutputs = []
+            batchDoneCount = 0
+            batchFailedCount = 0
+        }
+        updateBadge()
+        updateSleepAssertion()
+    }
+
+    // MARK: - Sleep prevention & notifications
+
+    private func updateSleepAssertion() {
+        if !runningJobs.isEmpty {
+            if sleepActivity == nil {
+                sleepActivity = ProcessInfo.processInfo.beginActivity(
+                    options: [.idleSystemSleepDisabled, .suddenTerminationDisabled],
+                    reason: "DropConvert is processing media"
+                )
+            }
+        } else {
+            endSleepAssertion()
+        }
+    }
+
+    private func endSleepAssertion() {
+        if let activity = sleepActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            sleepActivity = nil
+        }
+    }
+
+    private func requestNotificationPermissionIfNeeded() {
+        guard settings.notifyWhenDone,
+              !notificationPermissionRequested,
+              Bundle.main.bundleIdentifier != nil else { return }
+        notificationPermissionRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func postCompletionNotification(done: Int, failed: Int, lastTitle: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let content = UNMutableNotificationContent()
+        if failed == 0 {
+            content.title = done == 1 ? "Conversion complete" : "Converted \(done) files"
+            content.body = done == 1 ? lastTitle : "All queued items finished."
+        } else if done == 0 {
+            content.title = failed == 1 ? "Conversion failed" : "\(failed) conversions failed"
+            content.body = failed == 1 ? lastTitle : "Open DropConvert to inspect details."
+        } else {
+            content.title = "Queue finished"
+            content.body = "\(done) succeeded, \(failed) failed."
+        }
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString,
+                                            content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     private func updateBadge() {
@@ -788,10 +1106,10 @@ final class ConversionQueue: ObservableObject {
             NSApp.dockTile.badgeLabel = nil
             return
         }
-        if let running = jobs.first(where: {
-            if case .running = $0.state { return true }
-            return false
-        }), case .running(let fraction) = running.state, let fraction {
+        if runningJobs.count > 1 {
+            NSApp.dockTile.badgeLabel = "\(active.count)"
+        } else if let running = runningJobs.first,
+                  case .running(let fraction) = running.state, let fraction {
             NSApp.dockTile.badgeLabel = "\(Int(fraction * 100))%"
         } else {
             NSApp.dockTile.badgeLabel = "…"
@@ -820,6 +1138,7 @@ final class ConversionQueue: ObservableObject {
         }
         guard let ffmpeg else { return }
         let encoders = ffmpeg.encoders
+        let tmpPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
         for record in pendingRecords {
             let stored = OutputFormat.all.first(where: { $0.id == record.formatID })
             let format = stored?.isAvailable(encoders) == true ? stored : selectedFormat()
@@ -842,9 +1161,16 @@ final class ConversionQueue: ObservableObject {
             }
             job.note = record.note
             job.errorDetails = record.error
-            if case .file(let url) = record.source,
-               !FileManager.default.fileExists(atPath: url.path) {
-                job.state = .failed("The source file is missing.")
+            if case .file(let url) = record.source {
+                let parent = url.deletingLastPathComponent().standardizedFileURL
+                if parent.path.hasPrefix(tmpPath + "/DropConvert-") {
+                    job.staging = parent
+                }
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    job.state = .failed("The source file is missing.")
+                } else {
+                    job.inputSizeBytes = Self.fileSize(url)
+                }
             }
             jobs.append(job)
             observe(job)
@@ -958,12 +1284,26 @@ final class ConversionQueue: ObservableObject {
         return result
     }
 
-    /// Removes staging folders left behind by an earlier crash or quit.
-    nonisolated private static func removeStaleStaging() {
+    nonisolated private static func referencedStagingNames(in records: [JobRecord]) -> Set<String> {
+        let tmpPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        var names = Set<String>()
+        for record in records where record.state == "queued" {
+            guard case .file(let url) = record.source else { continue }
+            let parent = url.deletingLastPathComponent().standardizedFileURL
+            if parent.path.hasPrefix(tmpPath + "/DropConvert-") {
+                names.insert(parent.lastPathComponent)
+            }
+        }
+        return names
+    }
+
+    /// Removes staging folders left behind by an earlier crash or quit, while
+    /// preserving any folder still referenced by queued playlist items.
+    nonisolated private static func removeStaleStaging(keeping protected: Set<String> = []) {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory
         guard let names = try? fm.contentsOfDirectory(atPath: tmp.path) else { return }
-        for name in names where name.hasPrefix("DropConvert-") {
+        for name in names where name.hasPrefix("DropConvert-") && !protected.contains(name) {
             try? fm.removeItem(at: tmp.appendingPathComponent(name, isDirectory: true))
         }
     }
@@ -992,8 +1332,12 @@ final class ConversionQueue: ObservableObject {
     }
 
     nonisolated private static func downloadDetail(_ update: DownloadProgress) -> String {
-        var parts = ["Downloading"]
-        if let fraction = update.fraction { parts[0] += " \(Int(fraction * 100))%" }
+        var head = "Downloading"
+        if let index = update.itemIndex, let count = update.itemCount {
+            head += " item \(index)/\(count)"
+        }
+        if let fraction = update.fraction { head += " · \(Int(fraction * 100))%" }
+        var parts = [head]
         if let speed = update.speed { parts.append(speed) }
         if let eta = update.eta { parts.append("ETA \(eta)") }
         return parts.joined(separator: " · ")

@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var targeted = false
     @FocusState private var linkFocused: Bool
     @State private var detailJob: Job?
+    @State private var draggingJobID: UUID?
+    @State private var copiedInstallCommand = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -27,7 +29,7 @@ struct ContentView: View {
             }
         }
         .padding(14)
-        .frame(minWidth: 360, idealWidth: 360, maxWidth: .infinity)
+        .frame(minWidth: 360, idealWidth: 380, maxWidth: .infinity)
         .onAppear { linkFocused = true }
         .sheet(item: $detailJob) { job in
             JobDetailView(job: job)
@@ -43,7 +45,16 @@ struct ContentView: View {
             Menu {
                 Toggle("Use hardware encoder (VideoToolbox)", isOn: $settings.hardware)
                 Toggle("Show in Finder when done", isOn: $settings.revealWhenDone)
+                Toggle("Notify when done", isOn: $settings.notifyWhenDone)
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
+                Menu("Concurrent jobs") {
+                    ForEach([1, 2, 4], id: \.self) { count in
+                        let label = count == 1 ? "1 (Default)" : "\(count)"
+                        Button(settings.maxConcurrentJobs == count ? "✓ \(label)" : label) {
+                            settings.maxConcurrentJobs = count
+                        }
+                    }
+                }
                 Divider()
                 Menu("Cookies for sign-in") {
                     ForEach(CookieBrowser.allCases) { browser in
@@ -62,8 +73,7 @@ struct ContentView: View {
                 .disabled(queue.downloader == nil || queue.isUpdatingDownloader)
                 Button("Copy diagnostics") { copyDiagnostics() }
                 Divider()
-                Button(settings.outputFolder.map { "Save to: \($0.lastPathComponent)" }
-                       ?? "Save files beside the original") {}
+                Button(outputFolderMenuLabel) {}
                     .disabled(true)
                 Button("Choose output folder…", action: chooseFolder)
                 if settings.outputFolder != nil {
@@ -87,6 +97,14 @@ struct ContentView: View {
         }
     }
 
+    private var outputFolderMenuLabel: String {
+        guard let folder = settings.outputFolder else { return "Save files beside the original" }
+        if settings.outputFolderIsUnavailable {
+            return "⚠︎ \(folder.lastPathComponent) (unavailable)"
+        }
+        return "Save to: \(folder.lastPathComponent)"
+    }
+
     private var locating: some View {
         HStack(spacing: 8) {
             ProgressView().controlSize(.small)
@@ -102,9 +120,18 @@ struct ContentView: View {
                 .foregroundStyle(.orange)
             Text("DropConvert uses ffmpeg to convert. Install it with Homebrew, then check again:")
                 .font(.callout).foregroundStyle(.secondary)
-            Text("brew install ffmpeg").font(.system(.callout, design: .monospaced)).textSelection(.enabled)
-            Text("brew install yt-dlp").font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+            Text("brew install ffmpeg yt-dlp")
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
             HStack {
+                Button(copiedInstallCommand ? "Copied" : "Copy command") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString("brew install ffmpeg yt-dlp", forType: .string)
+                    copiedInstallCommand = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copiedInstallCommand = false
+                    }
+                }
                 Button("Check again") { queue.relocate() }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
@@ -184,8 +211,13 @@ struct ContentView: View {
                     Button("Check again") { queue.relocate() }.buttonStyle(.link)
                 } else {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("Saves to \(downloadFolderName)")
-                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        if settings.outputFolderIsUnavailable, let folder = settings.outputFolder {
+                            Text("“\(folder.lastPathComponent)” unavailable · using Downloads")
+                                .font(.caption2).foregroundStyle(.orange).lineLimit(1)
+                        } else {
+                            Text("Saves to \(downloadFolderName)")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
                         if let version = queue.downloader?.version {
                             Text("yt-dlp \(version)")
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -209,12 +241,37 @@ struct ContentView: View {
     private var options: some View {
         let formats = queue.availableFormats
         let format = formats.first { $0.id == settings.formatID } ?? formats.first
+        let recentFormats = settings.recentFormatIDs.compactMap { id in
+            formats.first(where: { $0.id == id })
+        }
         return VStack(alignment: .leading, spacing: 8) {
             Picker("Convert to", selection: $settings.formatID) {
                 ForEach([OutputFormat.Kind.video, .still, .image, .audio], id: \.self) { kind in
                     Section(kind.rawValue) {
                         ForEach(formats.filter { $0.kind == kind }) { f in
                             Text("\(f.name)  (.\(f.ext))").tag(f.id)
+                        }
+                    }
+                }
+            }
+            if recentFormats.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        Text("Recent:").font(.caption2).foregroundStyle(.secondary)
+                        ForEach(recentFormats) { recent in
+                            let selected = recent.id == format?.id
+                            Button(recent.name) {
+                                settings.formatID = recent.id
+                            }
+                            .buttonStyle(.plain)
+                            .font(.caption2.weight(selected ? .semibold : .regular))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule().fill(selected
+                                               ? Color.accentColor.opacity(0.18)
+                                               : Color.secondary.opacity(0.1)))
+                            .foregroundStyle(selected ? Color.accentColor : Color.primary)
                         }
                     }
                 }
@@ -251,7 +308,7 @@ struct ContentView: View {
     private var jobList: some View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
-            HStack {
+            HStack(spacing: 8) {
                 Text("Queue").font(.subheadline.weight(.semibold))
                 if queue.isPaused {
                     Text("Paused").font(.caption).foregroundStyle(.orange)
@@ -261,6 +318,9 @@ struct ContentView: View {
                     queue.setPaused(!queue.isPaused)
                 }
                 .buttonStyle(.link)
+                if queue.failedCount > 0 {
+                    Button("Retry failed") { queue.retryAllFailed() }.buttonStyle(.link)
+                }
                 if queue.activeCount > 0 {
                     Button("Cancel all") { queue.cancelAll() }.buttonStyle(.link)
                 }
@@ -270,8 +330,12 @@ struct ContentView: View {
             }
             ScrollView {
                 VStack(spacing: 8) {
-                    ForEach(queue.jobs) { job in
-                        JobRow(job: job) { detailJob = $0 }
+                    ForEach(Array(queue.jobs.enumerated()), id: \.element.id) { index, job in
+                        JobRow(job: job,
+                               isFirst: index == 0,
+                               isLast: index == queue.jobs.count - 1,
+                               draggingJobID: $draggingJobID,
+                               onDetails: { detailJob = $0 })
                     }
                 }
             }
@@ -329,6 +393,9 @@ struct ContentView: View {
 private struct JobRow: View {
     @EnvironmentObject var queue: ConversionQueue
     @ObservedObject var job: Job
+    let isFirst: Bool
+    let isLast: Bool
+    @Binding var draggingJobID: UUID?
     let onDetails: (Job) -> Void
 
     var body: some View {
@@ -357,6 +424,20 @@ private struct JobRow: View {
             Spacer(minLength: 4)
             actions
         }
+        .contentShape(Rectangle())
+        .onDrag {
+            if job.state == .done, let output = job.output {
+                draggingJobID = nil
+                return NSItemProvider(object: output as NSURL)
+            }
+            draggingJobID = job.id
+            return NSItemProvider(object: job.id.uuidString as NSString)
+        }
+        .onDrop(of: [.utf8PlainText], delegate: JobReorderDropDelegate(
+            targetID: job.id,
+            draggingJobID: $draggingJobID,
+            queue: queue
+        ))
         .contextMenu { menuItems }
     }
 
@@ -395,7 +476,7 @@ private struct JobRow: View {
                 Text(text).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
             }
         case .done:
-            Text("\(job.isRemote ? "Downloaded and converted" : "Done") in \(Self.time(job.elapsed))\(Self.size(job.output))")
+            Text("\(job.isRemote ? "Downloaded and converted" : "Done") in \(Self.time(job.elapsed))\(Self.sizeSummary(input: job.inputSizeBytes, output: job.outputSizeBytes, url: job.output))")
                 .font(.caption2).foregroundStyle(.secondary)
         case .failed(let message):
             Text(message).font(.caption2).foregroundStyle(.red)
@@ -439,14 +520,24 @@ private struct JobRow: View {
     }
 
     @ViewBuilder private var menuItems: some View {
+        let isRunning: Bool = {
+            if case .running = job.state { return true }
+            return false
+        }()
+        if job.state == .done, let output = job.output {
+            Button("Open output") { NSWorkspace.shared.open(output) }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([output]) }
+            Divider()
+        }
         Menu("Convert to") {
             ForEach(queue.availableFormats) { format in
                 Button(format.name) { queue.changeFormat(job, id: format.id) }
             }
         }
+        .disabled(isRunning)
         Divider()
-        Button("Move up") { queue.move(job, by: -1) }
-        Button("Move down") { queue.move(job, by: 1) }
+        Button("Move up") { queue.move(job, by: -1) }.disabled(isFirst)
+        Button("Move down") { queue.move(job, by: 1) }.disabled(isLast)
         Divider()
         Button("Remove") { queue.remove(job) }
     }
@@ -456,10 +547,40 @@ private struct JobRow: View {
         return s < 60 ? "\(s)s" : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    private static func size(_ url: URL?) -> String {
-        guard let url,
-              let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { return "" }
-        return " · " + ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    private static func sizeSummary(input: Int64?, output: Int64?, url: URL?) -> String {
+        let outBytes: Int64? = output ?? url.flatMap {
+            (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
+        }
+        guard let outBytes else { return "" }
+        let outText = ByteCountFormatter.string(fromByteCount: outBytes, countStyle: .file)
+        guard let input, input > 0 else { return " · " + outText }
+        let inText = ByteCountFormatter.string(fromByteCount: input, countStyle: .file)
+        let pct = Int(((Double(outBytes - input) / Double(input)) * 100).rounded())
+        let sign = pct > 0 ? "+" : ""
+        return " · \(inText) → \(outText) (\(sign)\(pct)%)"
+    }
+}
+
+private struct JobReorderDropDelegate: DropDelegate {
+    let targetID: UUID
+    @Binding var draggingJobID: UUID?
+    let queue: ConversionQueue
+
+    func dropEntered(info: DropInfo) {
+        guard let sourceID = draggingJobID, sourceID != targetID else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            queue.move(fromID: sourceID, toID: targetID)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard draggingJobID != nil else { return DropProposal(operation: .forbidden) }
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingJobID = nil
+        return true
     }
 }
 

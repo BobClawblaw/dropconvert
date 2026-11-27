@@ -31,24 +31,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         makeMainMenu()
 
         // macOS text views use Command-V, but support the Windows-style
-        // Control-V (and friends) that some people reach for.
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let flags = event.modifierFlags
-            guard flags.contains(.control) || flags.contains(.command) else { return event }
+        // Control-V (and friends) that some people reach for. Only intercept
+        // inside our main/popover window (not NSOpenPanel, About, or sheets).
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard flags == .command || flags == .control else { return event }
+            guard let window = event.window ?? NSApp.keyWindow,
+                  self.isPrimaryWindow(window),
+                  window.attachedSheet == nil else { return event }
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "v":
+                // Let normal paste replace selected text in the link field.
+                if flags == .command,
+                   let textView = window.firstResponder as? NSTextView,
+                   textView.selectedRange().length > 0 {
+                    return event
+                }
                 // Append with a line feed instead of relying on the field
                 // editor, which would fuse a URL without a trailing newline
                 // onto the previous link.
                 self.linkDraft.appendClipboard()
                 return nil
-            case "c" where flags.contains(.control):
+            case "c" where flags == .control:
                 NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
                 return nil
-            case "x" where flags.contains(.control):
+            case "x" where flags == .control:
                 NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
                 return nil
-            case "a" where flags.contains(.control):
+            case "a" where flags == .control:
                 NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
                 return nil
             default:
@@ -142,6 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
         popover.contentViewController?.view.window?.makeKey()
     }
 
+    private func isPrimaryWindow(_ window: NSWindow) -> Bool {
+        window === mainWindow || window === popover.contentViewController?.view.window
+    }
+
     /// The same controls in a regular window, opened from the Dock icon, the
     /// app menu, or when the menu-bar item is hidden.
     private func showMainWindow() {
@@ -150,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 680),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 640),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "DropConvert"
@@ -161,7 +176,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSDr
                 .environmentObject(queue)
                 .environmentObject(settings)
                 .environmentObject(linkDraft))
-        hosting.sizingOptions = [.preferredContentSize]
         window.contentViewController = hosting
         // `center()` follows the app's current screen, which can be a
         // secondary display. Pin the window to the main display instead.

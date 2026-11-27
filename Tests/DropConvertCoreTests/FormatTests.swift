@@ -105,4 +105,48 @@ extension FormatTests {
             XCTAssertFalse(args.contains("/tmp/in.jpg"), id)
         }
     }
+
+    func testSubtitleMappingForMP4AndMKV() throws {
+        let mp4 = try XCTUnwrap(OutputFormat.all.first { $0.id == "mp4-h264" })
+        let mp4Args = mp4.arguments(input: "/tmp/in.mkv", output: "/tmp/out.mp4", options: options())
+        XCTAssertTrue(mp4Args.contains("0:s?"))
+        let subIdx = try XCTUnwrap(mp4Args.firstIndex(of: "-c:s"))
+        XCTAssertEqual(mp4Args[subIdx + 1], "mov_text")
+
+        let mp4Remux = mp4.arguments(input: "/tmp/in.mkv", output: "/tmp/out.mp4",
+                                     options: options(remux: true))
+        XCTAssertTrue(mp4Remux.contains("0:s?"))
+        XCTAssertTrue(mp4Remux.contains("mov_text"))
+
+        let mp4NoSubs = mp4.arguments(input: "/tmp/in.mkv", output: "/tmp/out.mp4",
+                                      options: options(), includeSubtitles: false)
+        XCTAssertFalse(mp4NoSubs.contains("0:s?"))
+
+        let mkv = try XCTUnwrap(OutputFormat.all.first { $0.id == "mkv-h264" })
+        let mkvArgs = mkv.arguments(input: "/tmp/in.mkv", output: "/tmp/out.mkv", options: options())
+        XCTAssertTrue(mkvArgs.contains("0:s?"))
+        let mkvSubIdx = try XCTUnwrap(mkvArgs.firstIndex(of: "-c:s"))
+        XCTAssertEqual(mkvArgs[mkvSubIdx + 1], "copy")
+
+        let webm = try XCTUnwrap(OutputFormat.all.first { $0.id == "webm-vp9" })
+        let webmArgs = webm.arguments(input: "/tmp/in.mkv", output: "/tmp/out.webm", options: options())
+        XCTAssertFalse(webmArgs.contains("0:s?"))
+    }
+
+    func testAvailabilityRequiresAudioEncoderWithHardware() throws {
+        let mp4 = try XCTUnwrap(OutputFormat.all.first { $0.id == "mp4-h264" })
+        XCTAssertFalse(mp4.isAvailable(["h264_videotoolbox"]))
+        XCTAssertTrue(mp4.isAvailable(["h264_videotoolbox", "aac"]))
+    }
+
+    func testShortSideScaleFilterUsesOrientationAwareExpression() throws {
+        let mp4 = try XCTUnwrap(OutputFormat.all.first { $0.id == "mp4-h264" })
+        let opts = EncodeOptions(quality: .medium, resolution: .p1080, hardware: false,
+                                 remux: false, encoders: encoders)
+        let args = mp4.arguments(input: "/tmp/in.mov", output: "/tmp/out.mp4", options: opts)
+        let vfIndex = try XCTUnwrap(args.firstIndex(of: "-vf"))
+        let filter = args[vfIndex + 1]
+        XCTAssertTrue(filter.contains("lte(ih,iw)"))
+        XCTAssertTrue(filter.contains("1080"))
+    }
 }

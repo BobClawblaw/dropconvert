@@ -25,4 +25,14 @@ final class ErrorHintsTests: XCTestCase {
     func testUnknownReturnsNil() {
         XCTAssertNil(ErrorHints.message(for: "something entirely different"))
     }
+
+    func testFFmpegLocationOnlyTriggersOnErrors() {
+        XCTAssertNil(ErrorHints.message(for: "debug: --ffmpeg-location /opt/homebrew/bin"))
+        XCTAssertNotNil(ErrorHints.message(for: "ERROR: ffmpeg-location /bad/path does not exist"))
+    }
+
+    func testVideoToolboxHint() {
+        let message = ErrorHints.message(for: "[h264_videotoolbox] Error: cannot create compression session")
+        XCTAssertTrue(message?.contains("Hardware encoding") == true)
+    }
 }

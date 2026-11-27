@@ -50,4 +50,11 @@ final class OutputNamerTests: XCTestCase {
         XCTAssertLessThanOrEqual(safe.utf8.count, 200)
         XCTAssertEqual(OutputNamer.safeBase("   "), "video")
     }
+
+    func testCaseInsensitiveClaimedAvoidance() {
+        let claimed = folder.appendingPathComponent("Clip.mp4").standardizedFileURL.path
+        let output = OutputNamer.uniqueOutput(base: "clip", folder: folder, ext: "mp4",
+                                              avoiding: [claimed])
+        XCTAssertEqual(output.lastPathComponent, "clip 2.mp4")
+    }
 }
